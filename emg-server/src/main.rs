@@ -17,11 +17,14 @@ use serde::Serialize;
 use std::io::{BufWriter, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
+use std::time::Duration;
 
 const SSID: &str = env!("WIFI_SSID");
 const PASS: &str = env!("WIFI_PASS");
 
 fn main() -> Result<()> {
+    esp_idf_sys::link_patches();
+
     // Bind the log crate to the ESP Logging facilities
     esp_idf_svc::log::EspLogger::initialize_default();
 
@@ -129,5 +132,6 @@ fn handle_client(
         serde_json::to_writer(&mut stream, &Report { left_button })?;
         stream.write("\n".as_bytes())?;
         stream.flush()?;
+        std::thread::sleep(Duration::from_millis(5));
     }
 }
