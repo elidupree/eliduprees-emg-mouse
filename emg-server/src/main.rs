@@ -44,7 +44,7 @@ fn main() -> Result<()> {
     )?;
     let mut left_button_pin = peripherals.pins.gpio33.into_analog_atten_11db()?;
 
-    let listener = TcpListener::bind("0.0.0.0:8080")?;
+    let listener = TcpListener::bind(concat!("0.0.0.0:", env!("EMG_SERVER_PORT")))?;
 
     for stream in listener.incoming() {
         match stream {
