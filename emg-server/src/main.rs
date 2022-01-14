@@ -1,11 +1,13 @@
 use anyhow::{bail, Result};
 use embedded_hal::adc::OneShot;
+use embedded_hal::blocking::delay::DelayMs;
 use embedded_svc::wifi::{
     ApStatus, ClientConfiguration, ClientConnectionStatus, ClientIpStatus, ClientStatus,
     Configuration, Status, Wifi,
 };
 use esp_idf_hal::adc;
 use esp_idf_hal::adc::{Atten11dB, PoweredAdc, ADC1};
+use esp_idf_hal::delay::Ets;
 use esp_idf_hal::gpio::Gpio33;
 use esp_idf_hal::prelude::*;
 use esp_idf_svc::netif::EspNetifStack;
@@ -17,7 +19,6 @@ use serde::Serialize;
 use std::io::{BufWriter, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
-use std::time::Duration;
 
 const SSID: &str = env!("WIFI_SSID");
 const PASS: &str = env!("WIFI_PASS");
@@ -132,6 +133,6 @@ fn handle_client(
         serde_json::to_writer(&mut stream, &Report { left_button })?;
         stream.write("\n".as_bytes())?;
         stream.flush()?;
-        std::thread::sleep(Duration::from_millis(5));
+        Ets.delay_ms(5u32);
     }
 }
