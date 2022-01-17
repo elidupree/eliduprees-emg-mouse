@@ -5,6 +5,7 @@ use embedded_svc::wifi::{
     ApStatus, ClientConfiguration, ClientConnectionStatus, ClientIpStatus, ClientStatus,
     Configuration, Status, Wifi,
 };
+use emg_mouse_shared::Report;
 use esp_idf_hal::adc;
 use esp_idf_hal::adc::{Atten11dB, PoweredAdc, ADC1};
 use esp_idf_hal::delay::Ets;
@@ -15,7 +16,6 @@ use esp_idf_svc::nvs::EspDefaultNvs;
 use esp_idf_svc::sysloop::EspSysLoopStack;
 use esp_idf_svc::wifi::EspWifi;
 use log::{error, info};
-use serde::Serialize;
 use std::io::{BufWriter, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
@@ -114,11 +114,6 @@ fn wifi(
     }
 
     Ok(wifi)
-}
-
-#[derive(Serialize)]
-struct Report {
-    left_button: u16,
 }
 
 fn handle_client(
