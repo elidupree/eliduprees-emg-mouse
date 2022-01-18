@@ -42,23 +42,23 @@ pub fn run(SupervisorOptions { server_address }: SupervisorOptions) {
         if mouse_pressed {
             if data.left_button < unclick_threshold {
                 if do_clicks {
-                    enigo.mouse_down(MouseButton::Left);
+                    enigo.mouse_up(MouseButton::Left);
                 }
-                stream_handle.play_raw(click_sound.clone()).unwrap();
+                stream_handle.play_raw(unclick_sound.clone()).unwrap();
                 mouse_pressed = false;
             }
         } else {
             if data.left_button > click_threshold {
                 if do_clicks {
-                    enigo.mouse_up(MouseButton::Left);
+                    enigo.mouse_down(MouseButton::Left);
                 }
-                stream_handle.play_raw(unclick_sound.clone()).unwrap();
+                stream_handle.play_raw(click_sound.clone()).unwrap();
                 mouse_pressed = true;
             }
         }
     }
 
     if mouse_pressed && do_clicks {
-        enigo.mouse_down(MouseButton::Left);
+        enigo.mouse_up(MouseButton::Left);
     }
 }
