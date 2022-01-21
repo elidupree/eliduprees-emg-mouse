@@ -1,4 +1,11 @@
+#![feature(proc_macro_hygiene, decl_macro)]
+
+#[macro_use]
+extern crate rocket;
+
+mod rocket_glue;
 mod supervisor;
+mod webserver;
 
 use crate::supervisor::SupervisorOptions;
 use clap::{App, AppSettings, Arg, SubCommand};
@@ -16,6 +23,12 @@ fn main() {
                         .long("server-address")
                         .required(true)
                         .takes_value(true),
+                )
+                .arg(
+                    Arg::with_name("gui-port")
+                        .long("gui-port")
+                        .required(true)
+                        .takes_value(true),
                 ),
         )
         .get_matches();
@@ -24,6 +37,11 @@ fn main() {
         ("supervisor", Some(matches)) => {
             supervisor::run(SupervisorOptions {
                 server_address: matches.value_of("server-address").unwrap().to_string(),
+                gui_port: matches
+                    .value_of("gui-port")
+                    .unwrap()
+                    .parse::<u16>()
+                    .unwrap(),
             });
         }
         _ => {

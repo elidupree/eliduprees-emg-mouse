@@ -52,7 +52,7 @@ for line in s.makefile():
 
     total_inputs += 1
     now = datetime.now()
-    #print (f"{total_inputs}: {total_inputs/(now- start).total_seconds()}")
+    print (f"{total_inputs}: {total_inputs/(now- start).total_seconds()}")
 
     left_button_memory = left_button_memory[1:] + [data["left_button"]]
     # if total_inputs % 100 == 0:

@@ -1,14 +1,21 @@
+use crate::webserver::FrontendState;
+use crossbeam::atomic::AtomicCell;
 use emg_mouse_shared::Report;
 use enigo::{Enigo, MouseButton, MouseControllable};
 use rodio::source::Buffered;
 use rodio::{Decoder, OutputStream, Source};
+use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::net::TcpStream;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::mpsc;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 pub struct SupervisorOptions {
     pub server_address: String,
+    pub gui_port: u16,
 }
 
 fn load_sound(path: impl AsRef<Path>) -> Buffered<impl Source<Item = f32>> {
@@ -18,7 +25,29 @@ fn load_sound(path: impl AsRef<Path>) -> Buffered<impl Source<Item = f32>> {
         .buffered()
 }
 
-pub fn run(SupervisorOptions { server_address }: SupervisorOptions) {
+pub fn run(
+    SupervisorOptions {
+        server_address,
+        gui_port,
+    }: SupervisorOptions,
+) {
+    let state_updater = Arc::new(AtomicCell::new(None));
+    let mut frontend_state = FrontendState {
+        history: VecDeque::new(),
+    };
+    let (sender, _receiver) = mpsc::sync_channel(1);
+    std::thread::spawn({
+        let state_updater = state_updater.clone();
+        move || {
+            crate::rocket_glue::launch(
+                state_updater,
+                sender,
+                PathBuf::from("web_frontend"),
+                gui_port,
+            );
+        }
+    });
+
     let (_stream, stream_handle) = OutputStream::try_default().unwrap();
     let mut enigo = Enigo::new();
 
@@ -28,9 +57,14 @@ pub fn run(SupervisorOptions { server_address }: SupervisorOptions) {
     let server_stream = BufReader::new(TcpStream::connect(&server_address).unwrap());
 
     let mut mouse_pressed = false;
-    let click_threshold = 500;
-    let unclick_threshold = 200;
-    let do_clicks = false;
+    let click_threshold = 450;
+    let click_cooldown = Duration::from_millis(200);
+    let unclick_threshold = 350;
+    let do_clicks = true;
+
+    let start = Instant::now();
+    let mut total_inputs = 0;
+    let mut last_activation = Instant::now();
 
     for line in server_stream.lines() {
         let line = match line {
@@ -39,8 +73,13 @@ pub fn run(SupervisorOptions { server_address }: SupervisorOptions) {
         };
         let data: Report = serde_json::from_str(&line).unwrap();
         println!("{:?}", data);
+        if data.left_button >= unclick_threshold {
+            last_activation = Instant::now();
+        }
         if mouse_pressed {
-            if data.left_button < unclick_threshold {
+            if data.left_button < unclick_threshold
+                && (Instant::now() - last_activation) > click_cooldown
+            {
                 if do_clicks {
                     enigo.mouse_up(MouseButton::Left);
                 }
@@ -56,6 +95,20 @@ pub fn run(SupervisorOptions { server_address }: SupervisorOptions) {
                 mouse_pressed = true;
             }
         }
+        frontend_state
+            .history
+            .push_back(data.left_button as f64 / 3300.0);
+        if frontend_state.history.len() > 2500 {
+            frontend_state.history.pop_front();
+        }
+        state_updater.store(Some(frontend_state.clone()));
+        let now = Instant::now();
+        total_inputs += 1;
+        println!(
+            "{}: {}",
+            total_inputs,
+            total_inputs as f64 / (now - start).as_secs_f64()
+        );
     }
 
     if mouse_pressed && do_clicks {

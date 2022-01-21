@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
 use embedded_hal::adc::OneShot;
-use embedded_hal::blocking::delay::DelayMs;
+use embedded_hal::blocking::delay::DelayUs;
 use embedded_svc::wifi::{
     ApStatus, ClientConfiguration, ClientConnectionStatus, ClientIpStatus, ClientStatus,
     Configuration, Status, Wifi,
@@ -9,7 +9,7 @@ use emg_mouse_shared::Report;
 use esp_idf_hal::adc;
 use esp_idf_hal::adc::{Atten11dB, PoweredAdc, ADC1};
 use esp_idf_hal::delay::Ets;
-use esp_idf_hal::gpio::Gpio33;
+use esp_idf_hal::gpio::Gpio34;
 use esp_idf_hal::prelude::*;
 use esp_idf_svc::netif::EspNetifStack;
 use esp_idf_svc::nvs::EspDefaultNvs;
@@ -46,7 +46,7 @@ fn main() -> Result<()> {
         peripherals.adc1,
         adc::config::Config::new().calibration(true),
     )?;
-    let mut left_button_pin = peripherals.pins.gpio33.into_analog_atten_11db()?;
+    let mut left_button_pin = peripherals.pins.gpio34.into_analog_atten_11db()?;
 
     let listener = TcpListener::bind(concat!("0.0.0.0:", env!("EMG_SERVER_PORT")))?;
 
@@ -119,7 +119,7 @@ fn wifi(
 fn handle_client(
     stream: TcpStream,
     powered_adc1: &mut PoweredAdc<ADC1>,
-    left_button_pin: &mut Gpio33<Atten11dB<ADC1>>,
+    left_button_pin: &mut Gpio34<Atten11dB<ADC1>>,
 ) -> Result<()> {
     let mut stream = BufWriter::new(stream);
 
@@ -128,6 +128,6 @@ fn handle_client(
         serde_json::to_writer(&mut stream, &Report { left_button })?;
         stream.write("\n".as_bytes())?;
         stream.flush()?;
-        Ets.delay_ms(5u32);
+        Ets.delay_us(500u32);
     }
 }
