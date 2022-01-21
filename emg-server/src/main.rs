@@ -137,29 +137,27 @@ fn handle_client(
 ) -> Result<()> {
     let mut stream = BufWriter::new(stream);
     let start = Instant::now();
-    let previous_report = ReportFromServer {
+    let mut previous_report = ReportFromServer {
         time_since_start: Duration::from_secs(0),
         inputs: [0; 4],
     };
 
     loop {
-        let inputs = [
-            powered_adc1.read(pin1).unwrap(),
-            powered_adc1.read(pin2).unwrap(),
-            powered_adc1.read(pin3).unwrap(),
-            powered_adc1.read(pin4).unwrap(),
-        ];
-        let time_since_start = Instant::now() - start;
-        if inputs != previous_report.inputs
-            || time_since_start > previous_report.time_since_start + HEARTBEAT_DURATION
+        let report = ReportFromServer {
+            time_since_start: Instant::now() - start,
+            inputs: [
+                powered_adc1.read(pin1).unwrap(),
+                powered_adc1.read(pin2).unwrap(),
+                powered_adc1.read(pin3).unwrap(),
+                powered_adc1.read(pin4).unwrap(),
+            ],
+        };
+        if true
+            || report.inputs != previous_report.inputs
+            || report.time_since_start > previous_report.time_since_start + HEARTBEAT_DURATION
         {
-            bincode::serialize_into(
-                &mut stream,
-                &ReportFromServer {
-                    time_since_start,
-                    inputs,
-                },
-            )?;
+            bincode::serialize_into(&mut stream, &report)?;
+            previous_report = report;
             //stream.write("\n".as_bytes())?;
             stream.flush()?;
             Ets.delay_us(500u32);
