@@ -5,11 +5,11 @@ use embedded_svc::wifi::{
     ApStatus, ClientConfiguration, ClientConnectionStatus, ClientIpStatus, ClientStatus,
     Configuration, Status, Wifi,
 };
-use emg_mouse_shared::Report;
+use emg_mouse_shared::{ReportFromServer, HEARTBEAT_DURATION};
 use esp_idf_hal::adc;
 use esp_idf_hal::adc::{Atten11dB, PoweredAdc, ADC1};
 use esp_idf_hal::delay::Ets;
-use esp_idf_hal::gpio::Gpio34;
+use esp_idf_hal::gpio::{Gpio32, Gpio33, Gpio34, Gpio35};
 use esp_idf_hal::prelude::*;
 use esp_idf_svc::netif::EspNetifStack;
 use esp_idf_svc::nvs::EspDefaultNvs;
@@ -19,6 +19,7 @@ use log::{error, info};
 use std::io::{BufWriter, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 const SSID: &str = env!("WIFI_SSID");
 const PASS: &str = env!("WIFI_PASS");
@@ -46,7 +47,10 @@ fn main() -> Result<()> {
         peripherals.adc1,
         adc::config::Config::new().calibration(true),
     )?;
-    let mut left_button_pin = peripherals.pins.gpio34.into_analog_atten_11db()?;
+    let mut pin1 = peripherals.pins.gpio32.into_analog_atten_11db()?;
+    let mut pin2 = peripherals.pins.gpio33.into_analog_atten_11db()?;
+    let mut pin3 = peripherals.pins.gpio34.into_analog_atten_11db()?;
+    let mut pin4 = peripherals.pins.gpio35.into_analog_atten_11db()?;
 
     let listener = TcpListener::bind(concat!("0.0.0.0:", env!("EMG_SERVER_PORT")))?;
 
@@ -54,7 +58,14 @@ fn main() -> Result<()> {
         match stream {
             Ok(stream) => {
                 info!("Accepted client");
-                let _ = handle_client(stream, &mut powered_adc1, &mut left_button_pin);
+                let _ = handle_client(
+                    stream,
+                    &mut powered_adc1,
+                    &mut pin1,
+                    &mut pin2,
+                    &mut pin3,
+                    &mut pin4,
+                );
             }
             Err(e) => {
                 error!("Error: {}", e);
@@ -119,15 +130,39 @@ fn wifi(
 fn handle_client(
     stream: TcpStream,
     powered_adc1: &mut PoweredAdc<ADC1>,
-    left_button_pin: &mut Gpio34<Atten11dB<ADC1>>,
+    pin1: &mut Gpio32<Atten11dB<ADC1>>,
+    pin2: &mut Gpio33<Atten11dB<ADC1>>,
+    pin3: &mut Gpio34<Atten11dB<ADC1>>,
+    pin4: &mut Gpio35<Atten11dB<ADC1>>,
 ) -> Result<()> {
     let mut stream = BufWriter::new(stream);
+    let start = Instant::now();
+    let previous_report = ReportFromServer {
+        time_since_start: Duration::from_secs(0),
+        inputs: [0; 4],
+    };
 
     loop {
-        let left_button = powered_adc1.read(left_button_pin).unwrap();
-        serde_json::to_writer(&mut stream, &Report { left_button })?;
-        stream.write("\n".as_bytes())?;
-        stream.flush()?;
-        Ets.delay_us(500u32);
+        let inputs = [
+            powered_adc1.read(pin1).unwrap(),
+            powered_adc1.read(pin2).unwrap(),
+            powered_adc1.read(pin3).unwrap(),
+            powered_adc1.read(pin4).unwrap(),
+        ];
+        let time_since_start = Instant::now() - start;
+        if inputs != previous_report.inputs
+            || time_since_start > previous_report.time_since_start + HEARTBEAT_DURATION
+        {
+            bincode::serialize_into(
+                &mut stream,
+                &ReportFromServer {
+                    time_since_start,
+                    inputs,
+                },
+            )?;
+            //stream.write("\n".as_bytes())?;
+            stream.flush()?;
+            Ets.delay_us(500u32);
+        }
     }
 }

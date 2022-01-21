@@ -1,12 +1,12 @@
 use crate::webserver::FrontendState;
 use crossbeam::atomic::AtomicCell;
-use emg_mouse_shared::Report;
+use emg_mouse_shared::ReportFromServer;
 use enigo::{Enigo, MouseButton, MouseControllable};
 use rodio::source::Buffered;
 use rodio::{Decoder, OutputStream, Source};
 use std::collections::VecDeque;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::BufReader;
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -54,7 +54,7 @@ pub fn run(
     let click_sound = load_sound("../media/click.wav");
     let unclick_sound = load_sound("../media/unclick.wav");
 
-    let server_stream = BufReader::new(TcpStream::connect(&server_address).unwrap());
+    let mut server_stream = BufReader::new(TcpStream::connect(&server_address).unwrap());
 
     let mut mouse_pressed = false;
     let click_threshold = 450;
@@ -66,18 +66,14 @@ pub fn run(
     let mut total_inputs = 0;
     let mut last_activation = Instant::now();
 
-    for line in server_stream.lines() {
-        let line = match line {
-            Ok(line) => line,
-            Err(_) => break,
-        };
-        let data: Report = serde_json::from_str(&line).unwrap();
-        println!("{:?}", data);
-        if data.left_button >= unclick_threshold {
+    while let Ok(report) = bincode::deserialize_from::<_, ReportFromServer>(&mut server_stream) {
+        println!("{:?}", report);
+        let left_button = report.inputs[2];
+        if left_button >= unclick_threshold {
             last_activation = Instant::now();
         }
         if mouse_pressed {
-            if data.left_button < unclick_threshold
+            if left_button < unclick_threshold
                 && (Instant::now() - last_activation) > click_cooldown
             {
                 if do_clicks {
@@ -87,7 +83,7 @@ pub fn run(
                 mouse_pressed = false;
             }
         } else {
-            if data.left_button > click_threshold {
+            if left_button > click_threshold {
                 if do_clicks {
                     enigo.mouse_down(MouseButton::Left);
                 }
@@ -97,7 +93,7 @@ pub fn run(
         }
         frontend_state
             .history
-            .push_back(data.left_button as f64 / 3300.0);
+            .push_back(left_button as f64 / 3300.0);
         if frontend_state.history.len() > 2500 {
             frontend_state.history.pop_front();
         }
