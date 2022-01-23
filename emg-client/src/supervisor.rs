@@ -1,4 +1,4 @@
-use crate::webserver::FrontendState;
+use crate::webserver::{FrontendState, MessageFromFrontend};
 use crossbeam::atomic::AtomicCell;
 use emg_mouse_shared::ReportFromServer;
 use enigo::{Enigo, MouseButton, MouseControllable};
@@ -33,15 +33,16 @@ pub fn run(
 ) {
     let state_updater = Arc::new(AtomicCell::new(None));
     let mut frontend_state = FrontendState {
+        enabled: false,
         history: VecDeque::new(),
     };
-    let (sender, _receiver) = mpsc::sync_channel(1);
+    let (sender_from_frontend, receiver_from_frontend) = mpsc::sync_channel(1);
     std::thread::spawn({
         let state_updater = state_updater.clone();
         move || {
             crate::rocket_glue::launch(
                 state_updater,
-                sender,
+                sender_from_frontend,
                 PathBuf::from("web_frontend"),
                 gui_port,
             );
@@ -60,7 +61,7 @@ pub fn run(
     let click_threshold = 450;
     let click_cooldown = Duration::from_millis(200);
     let unclick_threshold = 350;
-    let do_clicks = true;
+    let mut enabled = false;
 
     let start = Instant::now();
     let mut total_inputs = 0;
@@ -68,6 +69,16 @@ pub fn run(
 
     while let Ok(report) = bincode::deserialize_from::<_, ReportFromServer>(&mut server_stream) {
         println!("{:?}", report);
+        while let Ok(message) = receiver_from_frontend.try_recv() {
+            match message {
+                MessageFromFrontend::SetEnabled(new_enabled) => {
+                    if mouse_pressed && !new_enabled {
+                        enigo.mouse_up(MouseButton::Left);
+                    }
+                    enabled = new_enabled;
+                }
+            }
+        }
         let left_button = report.inputs[2];
         if left_button >= unclick_threshold {
             last_activation = Instant::now();
@@ -76,25 +87,25 @@ pub fn run(
             if left_button < unclick_threshold
                 && (Instant::now() - last_activation) > click_cooldown
             {
-                if do_clicks {
-                    enigo.mouse_up(MouseButton::Left);
-                }
+                assert!(enabled);
+                enigo.mouse_up(MouseButton::Left);
                 stream_handle.play_raw(unclick_sound.clone()).unwrap();
                 mouse_pressed = false;
             }
         } else {
             if left_button > click_threshold {
-                if do_clicks {
+                if enabled {
                     enigo.mouse_down(MouseButton::Left);
+                    stream_handle.play_raw(click_sound.clone()).unwrap();
+                    mouse_pressed = true;
                 }
-                stream_handle.play_raw(click_sound.clone()).unwrap();
-                mouse_pressed = true;
             }
         }
+        frontend_state.enabled = enabled;
         frontend_state
             .history
             .push_back(left_button as f64 / 3300.0);
-        if frontend_state.history.len() > 2500 {
+        if frontend_state.history.len() > 700 {
             frontend_state.history.pop_front();
         }
         state_updater.store(Some(frontend_state.clone()));
@@ -107,7 +118,7 @@ pub fn run(
         );
     }
 
-    if mouse_pressed && do_clicks {
+    if mouse_pressed {
         enigo.mouse_up(MouseButton::Left);
     }
 }

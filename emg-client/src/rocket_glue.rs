@@ -1,6 +1,6 @@
 use crate::webserver::{FrontendState, MessageFromFrontend};
 use crossbeam::atomic::AtomicCell;
-use rocket::config::Environment;
+use rocket::config::{Environment, LoggingLevel};
 use rocket::response::NamedFile;
 use rocket::{Config, State};
 use rocket_contrib::json::Json;
@@ -44,7 +44,7 @@ pub fn launch(
         Config::build(Environment::Development)
             .address("localhost")
             .port(port)
-            //.log_level(LoggingLevel::Off)
+            .log_level(LoggingLevel::Off)
             .unwrap(),
     )
     //.mount("/media/", StaticFiles::from("../media"))

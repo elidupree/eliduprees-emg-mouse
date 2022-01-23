@@ -6,20 +6,33 @@
     <title>EMG mouse tool</title>
 </head>
 <body>
-<canvas id="canvas" width="600" height="900" />
+<div id="app" style="position: absolute; right: 0; width: 130px">
+<input type="checkbox" id="enabled_checkbox" style="display: block; width: 3em; height: 3em" />
+<canvas id="canvas" width="130" height="500" />
+</div>
 <script>
 
 
 const canvas = document.getElementById ("canvas");
 const context = canvas.getContext ("2d");
+const enabled_checkbox = document.getElementById ("enabled_checkbox");
+
+let previous_data = null;
+
+enabled_checkbox.addEventListener("click", e => {
+  fetch ("/input", {
+    method: "POST",
+    body: JSON.stringify ({SetEnabled: enabled_checkbox.checked}),
+  });
+});
 
       function update_canvas(data) {
         context.clearRect (0, 0, canvas.width, canvas.height);
         context.strokeStyle = "1px solid black";
         context.beginPath();
         data.history.forEach((value, index) => {
-          const x = index * 600 / data.history.length;
-          const y = value * 900;
+          const x = index * canvas.width / data.history.length;
+          const y = value * canvas.height * 2;
           if (index == 0) {
             context.moveTo(x,y)
              } else {
@@ -39,6 +52,7 @@ const context = canvas.getContext ("2d");
               const data = await response.json();
               if (data !== null) {
                 update_canvas(data);
+                enabled_checkbox.checked = data.enabled;
               }
             }
           }
