@@ -74,6 +74,7 @@ pub fn run(
                 MessageFromFrontend::SetEnabled(new_enabled) => {
                     if mouse_pressed && !new_enabled {
                         enigo.mouse_up(MouseButton::Left);
+                        mouse_pressed = false;
                     }
                     enabled = new_enabled;
                 }
