@@ -10,6 +10,7 @@ pub enum MessageToFollower {
 
 pub struct Follower {
     enigo: Enigo,
+    _audio_output_stream: OutputStream,
     audio_output_stream_handle: OutputStreamHandle,
     click_sound: Buffered<LoadedSound>,
     unclick_sound: Buffered<LoadedSound>,
@@ -17,13 +18,15 @@ pub struct Follower {
 
 impl Follower {
     pub fn new() -> Follower {
-        let (_stream, audio_output_stream_handle) = OutputStream::try_default().unwrap();
+        let (_audio_output_stream, audio_output_stream_handle) =
+            OutputStream::try_default().unwrap();
         let enigo = Enigo::new();
 
         let click_sound = load_sound("../media/click.wav");
         let unclick_sound = load_sound("../media/unclick.wav");
         Follower {
             enigo,
+            _audio_output_stream,
             audio_output_stream_handle,
             click_sound,
             unclick_sound,
