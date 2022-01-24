@@ -7,7 +7,15 @@ pub enum MessageFromFrontend {
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct HistoryFrame {
+    pub time: f64,
+    pub value: f64,
+    pub click_threshold: f64,
+    pub too_much_threshold: f64,
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct FrontendState {
     pub enabled: bool,
-    pub history: VecDeque<f64>,
+    pub history: VecDeque<HistoryFrame>,
 }

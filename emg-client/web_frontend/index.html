@@ -28,18 +28,26 @@ enabled_checkbox.addEventListener("click", e => {
 
       function update_canvas(data) {
         context.clearRect (0, 0, canvas.width, canvas.height);
-        context.strokeStyle = "1px solid black";
-        context.beginPath();
-        data.history.forEach((value, index) => {
-          const x = index * canvas.width / data.history.length;
-          const y = value * canvas.height * 2;
-          if (index == 0) {
-            context.moveTo(x,y)
-             } else {
-              context.lineTo(x,y);
-              }
-        });
-        context.stroke();
+        const last = data.history[data.history.length - 1];
+        function print_line (key) {
+            context.beginPath();
+            data.history.forEach((frame, index) => {
+              const x = canvas.width * (1.0 - (last.time - frame.time) / 0.8);
+              const y = frame [key] * canvas.height;
+              if (index == 0) {
+                context.moveTo(x,y)
+                 } else {
+                  context.lineTo(x,y);
+                  }
+            });
+            context.stroke();
+        }
+        context.strokeStyle = "black";
+        print_line ("value");
+        context.strokeStyle = "#88ff88";
+        print_line ("click_threshold");
+        context.strokeStyle = "#ff8888";
+        print_line ("too_much_threshold");
 
       }
 

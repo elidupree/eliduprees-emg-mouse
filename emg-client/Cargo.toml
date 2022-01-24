@@ -15,6 +15,7 @@ rodio = "0.14.0"
 rocket = "0.4.6"
 rocket_contrib = { version = "0.4.6", features = ["json"]}
 crossbeam = "0.8.1"
+ordered-float = "2.10.0"
 emg-mouse-shared = { path = "../emg-mouse-shared" }
 
 [profile.dev]

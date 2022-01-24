@@ -1,7 +1,8 @@
 use crate::follower::Follower;
-use crate::webserver::{FrontendState, MessageFromFrontend};
+use crate::webserver::{FrontendState, HistoryFrame, MessageFromFrontend};
 use crossbeam::atomic::AtomicCell;
 use emg_mouse_shared::ReportFromServer;
+use ordered_float::OrderedFloat;
 use std::collections::VecDeque;
 use std::io::BufReader;
 use std::net::TcpStream;
@@ -44,9 +45,7 @@ pub fn run(
     let mut server_stream = BufReader::new(TcpStream::connect(&server_address).unwrap());
 
     let mut mouse_pressed = false;
-    let click_threshold = 450;
     let click_cooldown = Duration::from_millis(200);
-    let unclick_threshold = 350;
     let mut enabled = false;
 
     let start = Instant::now();
@@ -60,38 +59,64 @@ pub fn run(
                 MessageFromFrontend::SetEnabled(new_enabled) => {
                     if mouse_pressed && !new_enabled {
                         local_follower.mouse_up();
+                        mouse_pressed = false;
                     }
                     enabled = new_enabled;
                 }
             }
         }
-        let left_button = report.inputs[2];
-        if left_button >= unclick_threshold {
+        let value = report.inputs[2] as f64 / 1000.0;
+        let time = report.time_since_start.as_secs_f64();
+        let recent_values = frontend_state
+            .history
+            .iter()
+            .filter(|frame| {
+                (time - 0.3..time - 0.1).contains(&frame.time) &&
+                // when we've analyzed something as a spike, also do not count it among the noise
+                frame.value < frame.click_threshold
+            })
+            .map(|frame| frame.value);
+        let recent_max = recent_values
+            .max_by_key(|&v| OrderedFloat(v))
+            .unwrap_or(1.0);
+
+        frontend_state.enabled = enabled;
+        frontend_state.history.push_back(HistoryFrame {
+            time,
+            value,
+            click_threshold: recent_max + 0.04,
+            too_much_threshold: recent_max + 0.12,
+        });
+        frontend_state
+            .history
+            .retain(|frame| frame.time >= time - 0.8);
+
+        let unclick_possible = value < 0.35;
+        if !unclick_possible {
             last_activation = Instant::now();
         }
         if mouse_pressed {
-            if left_button < unclick_threshold
-                && (Instant::now() - last_activation) > click_cooldown
-            {
+            if unclick_possible && (Instant::now() - last_activation) > click_cooldown {
                 assert!(enabled);
                 local_follower.mouse_up();
                 mouse_pressed = false;
             }
         } else {
-            if left_button > click_threshold {
-                if enabled {
-                    local_follower.mousedown();
-                    mouse_pressed = true;
-                }
+            let click_possible = frontend_state.history.iter().any(|frame| {
+                (time - 0.03..time - 0.02).contains(&frame.time)
+                    && frame.value > frame.click_threshold
+            });
+            let too_much = frontend_state
+                .history
+                .iter()
+                .any(|frame| frame.time >= time - 0.3 && frame.value > frame.too_much_threshold);
+            if enabled && click_possible && !too_much {
+                last_activation = Instant::now();
+                local_follower.mousedown();
+                mouse_pressed = true;
             }
         }
-        frontend_state.enabled = enabled;
-        frontend_state
-            .history
-            .push_back(left_button as f64 / 3300.0);
-        if frontend_state.history.len() > 700 {
-            frontend_state.history.pop_front();
-        }
+
         state_updater.store(Some(frontend_state.clone()));
         let now = Instant::now();
         total_inputs += 1;
