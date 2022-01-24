@@ -1,14 +1,11 @@
+use crate::follower::Follower;
 use crate::webserver::{FrontendState, MessageFromFrontend};
 use crossbeam::atomic::AtomicCell;
 use emg_mouse_shared::ReportFromServer;
-use enigo::{Enigo, MouseButton, MouseControllable};
-use rodio::source::Buffered;
-use rodio::{Decoder, OutputStream, Source};
 use std::collections::VecDeque;
-use std::fs::File;
 use std::io::BufReader;
 use std::net::TcpStream;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -16,13 +13,6 @@ use std::time::{Duration, Instant};
 pub struct SupervisorOptions {
     pub server_address: String,
     pub gui_port: u16,
-}
-
-fn load_sound(path: impl AsRef<Path>) -> Buffered<impl Source<Item = f32>> {
-    Decoder::new(BufReader::new(File::open(path).unwrap()))
-        .unwrap()
-        .convert_samples()
-        .buffered()
 }
 
 pub fn run(
@@ -49,11 +39,7 @@ pub fn run(
         }
     });
 
-    let (_stream, stream_handle) = OutputStream::try_default().unwrap();
-    let mut enigo = Enigo::new();
-
-    let click_sound = load_sound("../media/click.wav");
-    let unclick_sound = load_sound("../media/unclick.wav");
+    let mut local_follower = Follower::new();
 
     let mut server_stream = BufReader::new(TcpStream::connect(&server_address).unwrap());
 
@@ -73,8 +59,7 @@ pub fn run(
             match message {
                 MessageFromFrontend::SetEnabled(new_enabled) => {
                     if mouse_pressed && !new_enabled {
-                        enigo.mouse_up(MouseButton::Left);
-                        mouse_pressed = false;
+                        local_follower.mouse_up();
                     }
                     enabled = new_enabled;
                 }
@@ -89,15 +74,13 @@ pub fn run(
                 && (Instant::now() - last_activation) > click_cooldown
             {
                 assert!(enabled);
-                enigo.mouse_up(MouseButton::Left);
-                stream_handle.play_raw(unclick_sound.clone()).unwrap();
+                local_follower.mouse_up();
                 mouse_pressed = false;
             }
         } else {
             if left_button > click_threshold {
                 if enabled {
-                    enigo.mouse_down(MouseButton::Left);
-                    stream_handle.play_raw(click_sound.clone()).unwrap();
+                    local_follower.mousedown();
                     mouse_pressed = true;
                 }
             }
@@ -120,6 +103,6 @@ pub fn run(
     }
 
     if mouse_pressed {
-        enigo.mouse_up(MouseButton::Left);
+        local_follower.mouse_up();
     }
 }

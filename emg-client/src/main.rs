@@ -1,10 +1,12 @@
-#![feature(proc_macro_hygiene, decl_macro)]
+#![feature(proc_macro_hygiene, decl_macro, type_alias_impl_trait)]
 
 #[macro_use]
 extern crate rocket;
 
+mod follower;
 mod rocket_glue;
 mod supervisor;
+mod utils;
 mod webserver;
 
 use crate::supervisor::SupervisorOptions;
