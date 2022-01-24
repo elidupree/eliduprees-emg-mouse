@@ -45,7 +45,8 @@ pub fn run(
     let mut server_stream = BufReader::new(TcpStream::connect(&server_address).unwrap());
 
     let mut mouse_pressed = false;
-    let click_cooldown = Duration::from_millis(200);
+    let click_cooldown = Duration::from_millis(400);
+    let unclick_cooldown = Duration::from_millis(400);
     let mut enabled = false;
 
     let start = Instant::now();
@@ -84,8 +85,8 @@ pub fn run(
         frontend_state.history.push_back(HistoryFrame {
             time,
             value,
-            click_threshold: recent_max + 0.04,
-            too_much_threshold: recent_max + 0.12,
+            click_threshold: recent_max + 0.06,
+            too_much_threshold: recent_max + 0.14,
         });
         frontend_state
             .history
@@ -96,7 +97,7 @@ pub fn run(
             last_activation = Instant::now();
         }
         if mouse_pressed {
-            if unclick_possible && (Instant::now() - last_activation) > click_cooldown {
+            if unclick_possible && (Instant::now() - last_activation) > unclick_cooldown {
                 assert!(enabled);
                 local_follower.mouse_up();
                 mouse_pressed = false;
@@ -110,7 +111,11 @@ pub fn run(
                 .history
                 .iter()
                 .any(|frame| frame.time >= time - 0.3 && frame.value > frame.too_much_threshold);
-            if enabled && click_possible && !too_much {
+            if enabled
+                && click_possible
+                && !too_much
+                && (Instant::now() - last_activation) > click_cooldown
+            {
                 last_activation = Instant::now();
                 local_follower.mousedown();
                 mouse_pressed = true;
