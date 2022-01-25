@@ -1,4 +1,4 @@
-use crate::follower::Follower;
+use crate::follower::{Follower, LocalFollower};
 use crate::webserver::{FrontendState, HistoryFrame, MessageFromFrontend};
 use crossbeam::atomic::AtomicCell;
 use emg_mouse_shared::ReportFromServer;
@@ -40,7 +40,7 @@ pub fn run(
         }
     });
 
-    let mut local_follower = Follower::new();
+    let mut local_follower = LocalFollower::new();
 
     let mut server_stream = BufReader::new(TcpStream::connect(&server_address).unwrap());
 

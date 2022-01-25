@@ -9,6 +9,7 @@ mod supervisor;
 mod utils;
 mod webserver;
 
+use crate::follower::LocalFollower;
 use crate::supervisor::SupervisorOptions;
 use clap::{App, AppSettings, Arg, SubCommand};
 
@@ -33,6 +34,16 @@ fn main() {
                         .takes_value(true),
                 ),
         )
+        .subcommand(
+            SubCommand::with_name("follower")
+                .long_about("Listens for instructions from supervisor")
+                .arg(
+                    Arg::with_name("supervisor-address")
+                        .long("supervisor-address")
+                        .required(true)
+                        .takes_value(true),
+                ),
+        )
         .get_matches();
 
     match matches.subcommand() {
@@ -45,6 +56,9 @@ fn main() {
                     .parse::<u16>()
                     .unwrap(),
             });
+        }
+        ("follower", Some(matches)) => {
+            LocalFollower::new().listen_to_remote(matches.value_of("supervisor-address").unwrap());
         }
         _ => {
             unreachable!()
