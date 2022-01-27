@@ -8,12 +8,14 @@
 <body>
 <div id="app" style="position: absolute; right: 0; width: 130px">
 <input type="checkbox" id="enabled_checkbox" style="display: block; width: 3em; height: 3em" />
+    <div id="followers"></div>
 <canvas id="canvas" width="130" height="500" />
 </div>
 <script>
 
 
 const canvas = document.getElementById ("canvas");
+const followers_element = document.getElementById ("followers");
 const context = canvas.getContext ("2d");
 const enabled_checkbox = document.getElementById ("enabled_checkbox");
 
@@ -50,6 +52,21 @@ enabled_checkbox.addEventListener("click", e => {
         print_line ("too_much_threshold");
 
       }
+      function update_followers(data) {
+        for (const [name,duration] of data.followers) {
+          const id = "follower_" + name;
+          let element =document.getElementById (id);
+          if (!element) {
+            element = document.createElement("div");
+            element.id = id;
+            followers_element.appendChild(element);
+          }
+          const text = name+": "+duration;
+          if (element.innerText != text) {
+            element.innerText = text;
+          }
+        }
+      }
 
       async function frame() {
           try {
@@ -60,6 +77,7 @@ enabled_checkbox.addEventListener("click", e => {
               const data = await response.json();
               if (data !== null) {
                 update_canvas(data);
+                update_followers(data);
                 enabled_checkbox.checked = data.enabled;
               }
             }

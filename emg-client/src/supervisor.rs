@@ -76,9 +76,21 @@ impl Supervisor {
             self.active_follower_id = FollowerId::Local
         }
     }
-    fn update_frontend(&self) {
+    fn update_frontend(&mut self) {
+        let start_time = self.start_time;
         self.frontend_state_updater.store(Some(FrontendState {
             enabled: self.enabled,
+            followers: std::iter::once((
+                "Local".to_string(),
+                (self.local_follower.most_recent_mouse_move() - start_time).as_secs_f64(),
+            ))
+            .chain(self.remote_followers.iter_mut().map(|(n, f)| {
+                (
+                    n.clone(),
+                    (f.most_recent_mouse_move() - start_time).as_secs_f64(),
+                )
+            }))
+            .collect(),
             history: self.history.clone(),
         }));
     }
@@ -183,6 +195,7 @@ impl Supervisor {
             follower_port,
         }: SupervisorOptions,
     ) -> Supervisor {
+        let start_time = Instant::now();
         let frontend_state_updater = Arc::new(AtomicCell::new(None));
         let (sender, receiver) = mpsc::channel();
         std::thread::spawn({
@@ -259,7 +272,7 @@ impl Supervisor {
             }
         });
         Supervisor {
-            start_time: Instant::now(),
+            start_time,
             total_inputs: 0,
             local_follower,
             remote_followers: HashMap::new(),

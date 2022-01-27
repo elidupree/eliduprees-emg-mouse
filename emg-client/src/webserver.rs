@@ -17,5 +17,6 @@ pub struct HistoryFrame {
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub struct FrontendState {
     pub enabled: bool,
+    pub followers: Vec<(String, f64)>,
     pub history: VecDeque<HistoryFrame>,
 }
