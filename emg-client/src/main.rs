@@ -10,7 +10,7 @@ mod utils;
 mod webserver;
 
 use crate::follower::LocalFollower;
-use crate::supervisor::SupervisorOptions;
+use crate::supervisor::{Supervisor, SupervisorOptions};
 use clap::{App, AppSettings, Arg, SubCommand};
 
 fn main() {
@@ -32,6 +32,12 @@ fn main() {
                         .long("gui-port")
                         .required(true)
                         .takes_value(true),
+                )
+                .arg(
+                    Arg::with_name("follower-port")
+                        .long("follower-port")
+                        .required(true)
+                        .takes_value(true),
                 ),
         )
         .subcommand(
@@ -42,23 +48,38 @@ fn main() {
                         .long("supervisor-address")
                         .required(true)
                         .takes_value(true),
+                )
+                .arg(
+                    Arg::with_name("name")
+                        .long("name")
+                        .required(true)
+                        .takes_value(true),
                 ),
         )
         .get_matches();
 
     match matches.subcommand() {
         ("supervisor", Some(matches)) => {
-            supervisor::run(SupervisorOptions {
+            Supervisor::new(SupervisorOptions {
                 server_address: matches.value_of("server-address").unwrap().to_string(),
                 gui_port: matches
                     .value_of("gui-port")
                     .unwrap()
                     .parse::<u16>()
                     .unwrap(),
-            });
+                follower_port: matches
+                    .value_of("follower-port")
+                    .unwrap()
+                    .parse::<u16>()
+                    .unwrap(),
+            })
+            .run();
         }
         ("follower", Some(matches)) => {
-            LocalFollower::new().listen_to_remote(matches.value_of("supervisor-address").unwrap());
+            LocalFollower::new().listen_to_remote(
+                matches.value_of("supervisor-address").unwrap(),
+                matches.value_of("name").unwrap().to_string(),
+            );
         }
         _ => {
             unreachable!()

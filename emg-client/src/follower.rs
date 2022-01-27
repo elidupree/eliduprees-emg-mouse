@@ -20,6 +20,11 @@ pub enum MessageFromFollower {
     MouseMoved,
 }
 
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+pub struct FollowerIntroduction {
+    pub name: String,
+}
+
 pub struct LocalFollower {
     enigo: Enigo,
     _audio_output_stream: OutputStream,
@@ -30,8 +35,8 @@ pub struct LocalFollower {
 }
 
 pub struct RemoteFollower {
-    stream: TcpStream,
-    most_recent_mouse_move_updater: Arc<AtomicCell<Option<Instant>>>,
+    pub(crate) stream: BufWriter<TcpStream>,
+    pub(crate) most_recent_mouse_move_updater: Arc<AtomicCell<Option<Instant>>>,
 }
 
 pub trait Follower {
@@ -87,7 +92,7 @@ impl Follower for LocalFollower {
 }
 impl Follower for RemoteFollower {
     fn handle_message(&mut self, message: MessageToFollower) {
-        let _ = bincode::serialize_into(&self.stream, &message);
+        let _ = bincode::serialize_into(&mut self.stream, &message);
     }
 
     fn update_most_recent_mouse_move(&mut self) -> Option<Instant> {
@@ -120,7 +125,7 @@ impl LocalFollower {
         }
     }
 
-    pub fn listen_to_remote(mut self, supervisor_address: &str) {
+    pub fn listen_to_remote(mut self, supervisor_address: &str, name: String) {
         let supervisor_stream = TcpStream::connect(supervisor_address).unwrap();
         let (sender_from_supervisor, receiver_from_supervisor) = mpsc::channel();
         std::thread::spawn({
@@ -134,6 +139,7 @@ impl LocalFollower {
             }
         });
         let mut supervisor_stream = BufWriter::new(supervisor_stream);
+        bincode::serialize_into(&mut supervisor_stream, &FollowerIntroduction { name }).unwrap();
         loop {
             while let Ok(message) = receiver_from_supervisor.try_recv() {
                 self.handle_message(message);
@@ -148,6 +154,12 @@ impl LocalFollower {
 }
 
 impl<F: Follower> SupervisedFollower<F> {
+    pub fn new(follower: F) -> Self {
+        SupervisedFollower {
+            follower,
+            most_recent_mouse_move: Instant::now(),
+        }
+    }
     pub fn most_recent_mouse_move(&mut self) -> Instant {
         if let Some(new) = self.follower.update_most_recent_mouse_move() {
             self.most_recent_mouse_move = new;
