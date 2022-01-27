@@ -4,7 +4,7 @@ use enigo::{Enigo, MouseButton, MouseControllable};
 use rodio::source::Buffered;
 use rodio::{OutputStream, OutputStreamHandle};
 use serde::{Deserialize, Serialize};
-use std::io::{BufReader, BufWriter};
+use std::io::{BufReader, BufWriter, Write};
 use std::net::TcpStream;
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
@@ -93,6 +93,7 @@ impl Follower for LocalFollower {
 impl Follower for RemoteFollower {
     fn handle_message(&mut self, message: MessageToFollower) {
         let _ = bincode::serialize_into(&mut self.stream, &message);
+        let _ = self.stream.flush();
     }
 
     fn update_most_recent_mouse_move(&mut self) -> Option<Instant> {
@@ -140,6 +141,7 @@ impl LocalFollower {
         });
         let mut supervisor_stream = BufWriter::new(supervisor_stream);
         bincode::serialize_into(&mut supervisor_stream, &FollowerIntroduction { name }).unwrap();
+        supervisor_stream.flush().unwrap();
         loop {
             while let Ok(message) = receiver_from_supervisor.try_recv() {
                 self.handle_message(message);
@@ -147,6 +149,7 @@ impl LocalFollower {
             if let Some(_update) = self.update_most_recent_mouse_move() {
                 bincode::serialize_into(&mut supervisor_stream, &MessageFromFollower::MouseMoved)
                     .unwrap();
+                supervisor_stream.flush().unwrap();
             }
             std::thread::sleep(Duration::from_millis(1));
         }
