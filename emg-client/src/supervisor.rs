@@ -1,5 +1,6 @@
 use crate::follower::{
-    FollowerIntroduction, LocalFollower, RemoteFollower, SupervisedFollower, SupervisedFollowerMut,
+    FollowerIntroduction, LocalFollower, MessageFromFollower, RemoteFollower, SupervisedFollower,
+    SupervisedFollowerMut,
 };
 use crate::webserver::{FrontendState, HistoryFrame, MessageFromFrontend};
 use crossbeam::atomic::AtomicCell;
@@ -44,6 +45,7 @@ pub struct Supervisor {
 
     enabled: bool,
     mouse_pressed: bool,
+    recent: VecDeque<f64>,
     history: VecDeque<HistoryFrame>,
     last_activation: Instant,
 }
@@ -123,7 +125,15 @@ impl Supervisor {
 
         self.update_active_follower();
 
-        let value = report.inputs[2] as f64 / 1000.0;
+        self.recent.push_back(report.inputs[2] as f64 / 1500.0);
+        if self.recent.len() > 50 {
+            self.recent.pop_front();
+        }
+        let mean = self.recent.iter().sum::<f64>() / self.recent.len() as f64;
+        let variance =
+            self.recent.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / self.recent.len() as f64;
+
+        let value = variance.sqrt(); //report.inputs[2] as f64 / 1000.0;
         let time = report.time_since_start.as_secs_f64();
         let recent_values = self
             .history
@@ -141,8 +151,8 @@ impl Supervisor {
         self.history.push_back(HistoryFrame {
             time,
             value,
-            click_threshold: recent_max + 0.06,
-            too_much_threshold: recent_max + 0.14,
+            click_threshold: recent_max + 0.01,
+            too_much_threshold: recent_max + 0.06,
         });
         self.history.retain(|frame| frame.time >= time - 0.8);
 
@@ -182,9 +192,10 @@ impl Supervisor {
         self.update_frontend();
         self.total_inputs += 1;
         println!(
-            "{}: {}",
+            "{}: {:.2}, {}",
             self.total_inputs,
-            self.total_inputs as f64 / report.time_since_start.as_secs_f64()
+            self.total_inputs as f64 / report.time_since_start.as_secs_f64(),
+            report.time_since_start.as_micros(),
         );
     }
 
@@ -243,25 +254,26 @@ impl Supervisor {
                                         &mut read_stream,
                                     )
                                 {
+                                    let updater = Arc::new(AtomicCell::new(None));
                                     sender
                                         .send(MessageToSupervisor::NewFollower(
                                             introduction.name,
                                             SupervisedFollower::new(RemoteFollower {
                                                 stream: write_stream,
-                                                most_recent_mouse_move_updater: Arc::new(
-                                                    AtomicCell::new(None),
-                                                ),
+                                                most_recent_mouse_move_updater: updater.clone(),
                                             }),
                                         ))
                                         .unwrap();
                                     while let Ok(message) =
-                                        bincode::deserialize_from::<_, ReportFromServer>(
+                                        bincode::deserialize_from::<_, MessageFromFollower>(
                                             &mut read_stream,
                                         )
                                     {
-                                        sender
-                                            .send(MessageToSupervisor::FromServer(message))
-                                            .unwrap();
+                                        match message {
+                                            MessageFromFollower::MouseMoved => {
+                                                updater.store(Some(Instant::now()))
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -281,6 +293,7 @@ impl Supervisor {
             receiver,
             enabled: false,
             mouse_pressed: false,
+            recent: VecDeque::new(),
             history: VecDeque::new(),
             last_activation: Instant::now(),
         }
