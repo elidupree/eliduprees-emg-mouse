@@ -165,7 +165,7 @@ fn handle_client(
             let next_report_time = start + Duration::from_millis(num_reports);
             let now = Instant::now();
             if let Some(delay_needed) = next_report_time.checked_duration_since(now) {
-                Ets.delay_us(delay_needed.as_micros());
+                Ets.delay_us(delay_needed.as_micros() as u32);
             }
         }
     }
