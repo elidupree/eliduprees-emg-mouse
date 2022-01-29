@@ -137,6 +137,7 @@ fn handle_client(
 ) -> Result<()> {
     let mut stream = BufWriter::new(stream);
     let start = Instant::now();
+    let mut num_reports = 0;
     let mut previous_report = ReportFromServer {
         time_since_start: Duration::from_secs(0),
         inputs: [0; 4],
@@ -157,10 +158,15 @@ fn handle_client(
             || report.time_since_start > previous_report.time_since_start + HEARTBEAT_DURATION
         {
             bincode::serialize_into(&mut stream, &report)?;
+            stream.flush()?;
+            num_reports += 1;
             previous_report = report;
             //stream.write("\n".as_bytes())?;
-            stream.flush()?;
-            Ets.delay_us(500u32);
+            let next_report_time = start + Duration::from_millis(num_reports);
+            let now = Instant::now();
+            if let Some(delay_needed) = next_report_time.checked_duration_since(now) {
+                Ets.delay_us(delay_needed.as_micros());
+            }
         }
     }
 }
