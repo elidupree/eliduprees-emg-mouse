@@ -53,8 +53,10 @@ enabled_checkbox.addEventListener("click", e => {
 
       }
       function update_followers(data) {
+        const ids = {};
         for (const [name,duration] of data.followers) {
           const id = "follower_" + name;
+          ids[id] = true;
           let element =document.getElementById (id);
           if (!element) {
             element = document.createElement("div");
@@ -64,6 +66,12 @@ enabled_checkbox.addEventListener("click", e => {
           const text = name+": "+duration;
           if (element.innerText != text) {
             element.innerText = text;
+          }
+        }
+
+        for (const child of followers_element.children) {
+          if (!ids[child.id]) {
+            child.remove();
           }
         }
       }
