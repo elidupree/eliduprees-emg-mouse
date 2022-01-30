@@ -6,6 +6,8 @@ use crate::webserver::{FrontendState, HistoryFrame, MessageFromFrontend};
 use crossbeam::atomic::AtomicCell;
 use emg_mouse_shared::ReportFromServer;
 use ordered_float::OrderedFloat;
+use rustfft::num_complex::Complex;
+use rustfft::FftPlanner;
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufReader, BufWriter};
 use std::net::{TcpListener, TcpStream};
@@ -47,7 +49,10 @@ pub struct Supervisor {
     mouse_pressed: bool,
     recent: VecDeque<f64>,
     history: VecDeque<HistoryFrame>,
+    frequencies_history: VecDeque<Vec<f64>>,
     last_activation: Instant,
+
+    fft_planner: FftPlanner<f64>,
 }
 
 impl Supervisor {
@@ -94,6 +99,7 @@ impl Supervisor {
             }))
             .collect(),
             history: self.history.clone(),
+            frequencies_history: self.frequencies_history.clone(),
         }));
     }
     fn handle_message(&mut self, message: MessageToSupervisor) {
@@ -129,6 +135,23 @@ impl Supervisor {
         if self.recent.len() > 50 {
             self.recent.pop_front();
         }
+
+        if self.recent.len() == 50 && self.total_inputs % 30 == 0 {
+            let fft = self.fft_planner.plan_fft_forward(50);
+
+            let mut buffer: Vec<_> = self
+                .recent
+                .iter()
+                .map(|&re| Complex { re, im: 0.0 })
+                .collect();
+            fft.process(&mut buffer);
+            self.frequencies_history
+                .push_back(buffer.into_iter().map(|c| c.re).collect());
+            if self.frequencies_history.len() > 26 {
+                self.frequencies_history.pop_front();
+            }
+        }
+
         let mean = self.recent.iter().sum::<f64>() / self.recent.len() as f64;
         let variance =
             self.recent.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / self.recent.len() as f64;
@@ -295,7 +318,9 @@ impl Supervisor {
             mouse_pressed: false,
             recent: VecDeque::new(),
             history: VecDeque::new(),
+            frequencies_history: VecDeque::new(),
             last_activation: Instant::now(),
+            fft_planner: FftPlanner::new(),
         }
     }
     pub fn run(mut self) {

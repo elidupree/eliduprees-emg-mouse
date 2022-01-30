@@ -51,6 +51,17 @@ enabled_checkbox.addEventListener("click", e => {
         context.strokeStyle = "#ff8888";
         print_line ("too_much_threshold");
 
+            data.frequencies_history.forEach((frequencies, time_index) => {
+            const box_width = canvas.width / data.frequencies_history.length;
+            const box_height = canvas.height / data.frequencies_history [0].length / 2;
+            frequencies.forEach((intensity, frequency_index) => {
+    context.fillStyle = `rgb(
+        ${Math.floor(255 * intensity)},
+        ${Math.floor(255 * intensity)},
+        0)`;
+    context.fillRect(time_index * box_width, frequency_index * box_height+ canvas.height / 2, box_width, box_height);
+  })
+})
       }
       function update_followers(data) {
         const ids = {};
