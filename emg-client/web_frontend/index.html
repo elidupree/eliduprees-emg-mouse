@@ -35,7 +35,7 @@ enabled_checkbox.addEventListener("click", e => {
             context.beginPath();
             data.history.forEach((frame, index) => {
               const x = canvas.width * (1.0 - (last.time - frame.time) / 0.8);
-              const y = frame [key] * canvas.height;
+              const y = (-Math.log(frame [key] * 0.999 + 0.001) / Math.log(0.001) + 1) * canvas.height / 2;
               if (index == 0) {
                 context.moveTo(x,y)
                  } else {

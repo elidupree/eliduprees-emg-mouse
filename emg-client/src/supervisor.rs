@@ -136,7 +136,7 @@ impl Supervisor {
             self.recent.pop_front();
         }
 
-        if self.recent.len() == 50 && self.total_inputs % 30 == 0 {
+        if self.recent.len() == 50 && self.total_inputs % 10 == 0 {
             let fft = self.fft_planner.plan_fft_forward(50);
 
             let mut buffer: Vec<_> = self
@@ -147,7 +147,7 @@ impl Supervisor {
             fft.process(&mut buffer);
             self.frequencies_history
                 .push_back(buffer.into_iter().map(|c| c.re).collect());
-            if self.frequencies_history.len() > 26 {
+            if self.frequencies_history.len() > 80 {
                 self.frequencies_history.pop_front();
             }
         }
@@ -174,7 +174,7 @@ impl Supervisor {
         self.history.push_back(HistoryFrame {
             time,
             value,
-            click_threshold: recent_max + 0.01,
+            click_threshold: recent_max + 0.005,
             too_much_threshold: recent_max + 0.06,
         });
         self.history.retain(|frame| frame.time >= time - 0.8);
@@ -200,10 +200,13 @@ impl Supervisor {
                 .any(|frame| frame.time >= time - 0.3 && frame.value > frame.too_much_threshold);
             let move_time = self.active_follower().most_recent_mouse_move();
             let recently_moved = (Instant::now() - move_time) < Duration::from_millis(100);
+            let anywhere_near_recently_moved =
+                (Instant::now() - move_time) < Duration::from_millis(3000);
             if self.enabled
                 && click_possible
                 && !too_much
                 && !recently_moved
+                && anywhere_near_recently_moved
                 && (Instant::now() - self.last_activation) > click_cooldown
             {
                 self.last_activation = Instant::now();

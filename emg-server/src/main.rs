@@ -137,14 +137,17 @@ fn handle_client(
 ) -> Result<()> {
     let mut stream = BufWriter::new(stream);
     let start = Instant::now();
+    // let mut num_reports = 0;
     let mut next_report_time = start;
-    const MAX_CATCH_UP_DURATION: Duration = Duration::from_millis(2);
+    const MAX_CATCH_UP_DURATION: Duration = Duration::from_millis(2000);
     let mut previous_report = ReportFromServer {
         time_since_start: Duration::from_secs(0),
         inputs: [0; 4],
     };
+    // let mut max_behind_by = Duration::from_millis(0);
 
     loop {
+        // let before_read = Instant::now();
         let report = ReportFromServer {
             time_since_start: Instant::now() - start,
             inputs: [
@@ -154,21 +157,43 @@ fn handle_client(
                 powered_adc1.read(pin4).unwrap(),
             ],
         };
+        // let read_duration = Instant::now() - before_read;
+        // if read_duration > Duration::from_millis(3) {
+        //     log::info!("Read took {:?}", read_duration);
+        // }
         if true
             || report.inputs != previous_report.inputs
             || report.time_since_start > previous_report.time_since_start + HEARTBEAT_DURATION
         {
+            // let before_send = Instant::now();
             bincode::serialize_into(&mut stream, &report)?;
             stream.flush()?;
+            // let send_duration = Instant::now() - before_send;
+            // if send_duration > Duration::from_millis(5) {
+            //     log::info!("Send took {:?}", send_duration);
+            // }
+            // num_reports += 1;
             previous_report = report;
             //stream.write("\n".as_bytes())?;
             let now = Instant::now();
+            // if let Some(behind_by) = now.checked_duration_since(next_report_time) {
+            //     max_behind_by = max_behind_by.max(behind_by);
+            //     //log::info!("Behind by {:?}", max_behind_by);
+            // }
+            // if num_reports % 10000 == 0 {
+            //     log::info!("Behind by {:?}", max_behind_by);
+            // }
             if now > next_report_time + MAX_CATCH_UP_DURATION {
                 next_report_time = now;
             }
             next_report_time += Duration::from_millis(1);
             if let Some(delay_needed) = next_report_time.checked_duration_since(now) {
                 Ets.delay_us(delay_needed.as_micros() as u32);
+                // while Instant::now() < next_report_time {}
+                // let schedule_duration = Instant::now() - next_report_time;
+                // if schedule_duration > Duration::from_millis(1) {
+                //     log::info!("Schedule took {:?}", schedule_duration);
+                // }
             }
         }
     }
