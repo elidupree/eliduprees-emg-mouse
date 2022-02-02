@@ -9,7 +9,7 @@ use ordered_float::OrderedFloat;
 use rustfft::num_complex::Complex;
 use rustfft::FftPlanner;
 use std::collections::{HashMap, VecDeque};
-use std::io::{BufReader, BufWriter};
+use std::io::BufReader;
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::mpsc;
@@ -31,7 +31,13 @@ pub enum MessageToSupervisor {
     FromFrontend(MessageFromFrontend),
     FromServer(ReportFromServer),
     NewFollower(String, SupervisedFollower<RemoteFollower>),
+    FromFollower(String, MessageFromFollower),
 }
+
+// struct Signals {
+//     signals: Vec<Signal>,
+// }
+// struct Signal {}
 
 pub struct Supervisor {
     start_time: Instant,
@@ -111,6 +117,9 @@ impl Supervisor {
             MessageToSupervisor::NewFollower(name, follower) => {
                 self.remote_followers.insert(name, follower);
             }
+            MessageToSupervisor::FromFollower(name, message) => {
+                self.handle_message_from_follower(name, message)
+            }
         }
     }
     fn handle_message_from_frontend(&mut self, message: MessageFromFrontend) {
@@ -125,10 +134,21 @@ impl Supervisor {
             }
         }
     }
+    fn handle_message_from_follower(&mut self, name: String, message: MessageFromFollower) {
+        match message {
+            MessageFromFollower::MouseMoved { time_since_start } => {
+                let now = Instant::now();
+                let follower = self.remote_followers.get_mut(&name).unwrap();
+                follower.observe_message(time_since_start, now);
+                follower.remote_mouse_moved(time_since_start);
+            }
+        }
+    }
     fn handle_report(&mut self, report: ReportFromServer) {
-        let click_cooldown = Duration::from_millis(400);
-        let unclick_cooldown = Duration::from_millis(400);
+        let click_cooldown = Duration::from_millis(800);
+        let unclick_cooldown = Duration::from_millis(200);
 
+        self.local_follower.update_most_recent_mouse_move();
         self.update_active_follower();
 
         self.recent.push_back(report.inputs[2] as f64 / 1500.0);
@@ -201,7 +221,7 @@ impl Supervisor {
             let move_time = self.active_follower().most_recent_mouse_move();
             let recently_moved = (Instant::now() - move_time) < Duration::from_millis(100);
             let anywhere_near_recently_moved =
-                (Instant::now() - move_time) < Duration::from_millis(3000);
+                (Instant::now() - move_time) < Duration::from_millis(10000);
             if self.enabled
                 && click_possible
                 && !too_much
@@ -274,20 +294,18 @@ impl Supervisor {
                             let sender = sender.clone();
                             move || {
                                 let mut read_stream = BufReader::new(stream.try_clone().unwrap());
-                                let write_stream = BufWriter::new(stream);
+                                let write_stream = stream;
                                 if let Ok(introduction) =
                                     bincode::deserialize_from::<_, FollowerIntroduction>(
                                         &mut read_stream,
                                     )
                                 {
-                                    let updater = Arc::new(AtomicCell::new(None));
                                     sender
                                         .send(MessageToSupervisor::NewFollower(
-                                            introduction.name,
-                                            SupervisedFollower::new(RemoteFollower {
-                                                stream: write_stream,
-                                                most_recent_mouse_move_updater: updater.clone(),
-                                            }),
+                                            introduction.name.clone(),
+                                            SupervisedFollower::new(RemoteFollower::new(
+                                                write_stream,
+                                            )),
                                         ))
                                         .unwrap();
                                     while let Ok(message) =
@@ -295,11 +313,12 @@ impl Supervisor {
                                             &mut read_stream,
                                         )
                                     {
-                                        match message {
-                                            MessageFromFollower::MouseMoved => {
-                                                updater.store(Some(Instant::now()))
-                                            }
-                                        }
+                                        sender
+                                            .send(MessageToSupervisor::FromFollower(
+                                                introduction.name.clone(),
+                                                message,
+                                            ))
+                                            .unwrap();
                                     }
                                 }
                             }

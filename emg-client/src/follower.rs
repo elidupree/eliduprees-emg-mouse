@@ -1,12 +1,12 @@
+use crate::remote_time_estimator::RemoteTimeEstimator;
 use crate::utils::{load_sound, LoadedSound};
-use crossbeam::atomic::AtomicCell;
 use enigo::{Enigo, MouseButton, MouseControllable};
 use rodio::source::Buffered;
 use rodio::{OutputStream, OutputStreamHandle};
 use serde::{Deserialize, Serialize};
 use std::io::{BufReader, BufWriter, Write};
 use std::net::TcpStream;
-use std::sync::{mpsc, Arc};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
@@ -17,7 +17,7 @@ pub enum MessageToFollower {
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub enum MessageFromFollower {
-    MouseMoved,
+    MouseMoved { time_since_start: Duration },
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
@@ -35,8 +35,8 @@ pub struct LocalFollower {
 }
 
 pub struct RemoteFollower {
-    pub(crate) stream: BufWriter<TcpStream>,
-    pub(crate) most_recent_mouse_move_updater: Arc<AtomicCell<Option<Instant>>>,
+    stream: BufWriter<TcpStream>,
+    remote_time_estimator: RemoteTimeEstimator,
 }
 
 pub trait Follower {
@@ -54,13 +54,11 @@ pub trait Follower {
     fn mouse_up(&mut self) {
         self.handle_message(MessageToFollower::MouseUp)
     }
-
-    fn update_most_recent_mouse_move(&mut self) -> Option<Instant>;
 }
 
 pub struct SupervisedFollower<F> {
-    follower: F,
-    most_recent_mouse_move: Instant,
+    pub follower: F,
+    pub most_recent_mouse_move: Instant,
 }
 
 pub enum SupervisedFollowerMut<'a> {
@@ -82,22 +80,11 @@ impl Follower for LocalFollower {
             .play_raw(self.unclick_sound.clone())
             .unwrap();
     }
-
-    fn update_most_recent_mouse_move(&mut self) -> Option<Instant> {
-        let new_location = self.enigo.mouse_location();
-        let result = (new_location != self.most_recent_mouse_location).then(|| Instant::now());
-        self.most_recent_mouse_location = new_location;
-        result
-    }
 }
 impl Follower for RemoteFollower {
     fn handle_message(&mut self, message: MessageToFollower) {
         let _ = bincode::serialize_into(&mut self.stream, &message);
         let _ = self.stream.flush();
-    }
-
-    fn update_most_recent_mouse_move(&mut self) -> Option<Instant> {
-        self.most_recent_mouse_move_updater.take()
     }
 }
 
@@ -142,16 +129,38 @@ impl LocalFollower {
         let mut supervisor_stream = BufWriter::new(supervisor_stream);
         bincode::serialize_into(&mut supervisor_stream, &FollowerIntroduction { name }).unwrap();
         supervisor_stream.flush().unwrap();
+        let start = Instant::now();
         loop {
             while let Ok(message) = receiver_from_supervisor.try_recv() {
                 self.handle_message(message);
             }
             if let Some(_update) = self.update_most_recent_mouse_move() {
-                bincode::serialize_into(&mut supervisor_stream, &MessageFromFollower::MouseMoved)
-                    .unwrap();
+                let now = Instant::now();
+                let time_since_start = now - start;
+                bincode::serialize_into(
+                    &mut supervisor_stream,
+                    &MessageFromFollower::MouseMoved { time_since_start },
+                )
+                .unwrap();
                 supervisor_stream.flush().unwrap();
             }
             std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    fn update_most_recent_mouse_move(&mut self) -> Option<Instant> {
+        let new_location = self.enigo.mouse_location();
+        let result = (new_location != self.most_recent_mouse_location).then(|| Instant::now());
+        self.most_recent_mouse_location = new_location;
+        result
+    }
+}
+
+impl RemoteFollower {
+    pub fn new(stream: TcpStream) -> RemoteFollower {
+        RemoteFollower {
+            stream: BufWriter::new(stream),
+            remote_time_estimator: RemoteTimeEstimator::new(Duration::from_micros(500)),
         }
     }
 }
@@ -164,10 +173,7 @@ impl<F: Follower> SupervisedFollower<F> {
         }
     }
     pub fn most_recent_mouse_move(&mut self) -> Instant {
-        if let Some(new) = self.follower.update_most_recent_mouse_move() {
-            self.most_recent_mouse_move = new;
-        }
-        self.most_recent_mouse_move.clone()
+        self.most_recent_mouse_move
     }
 
     pub fn mousedown(&mut self) {
@@ -179,11 +185,33 @@ impl<F: Follower> SupervisedFollower<F> {
     }
 }
 
+impl SupervisedFollower<LocalFollower> {
+    pub fn update_most_recent_mouse_move(&mut self) {
+        if let Some(update) = self.follower.update_most_recent_mouse_move() {
+            self.most_recent_mouse_move = update;
+        }
+    }
+}
+
+impl SupervisedFollower<RemoteFollower> {
+    pub fn observe_message(&mut self, remote_time_since_start: Duration, received_by: Instant) {
+        self.follower
+            .remote_time_estimator
+            .observe(remote_time_since_start.as_secs_f64(), received_by);
+    }
+    pub fn remote_mouse_moved(&mut self, remote_time_since_start: Duration) {
+        self.most_recent_mouse_move = self
+            .follower
+            .remote_time_estimator
+            .estimate_local_time(remote_time_since_start.as_secs_f64());
+    }
+}
+
 impl<'a> SupervisedFollowerMut<'a> {
     pub fn most_recent_mouse_move(&mut self) -> Instant {
         match self {
-            SupervisedFollowerMut::Local(f) => f.most_recent_mouse_move(),
-            SupervisedFollowerMut::Remote(f) => f.most_recent_mouse_move(),
+            SupervisedFollowerMut::Local(f) => f.most_recent_mouse_move,
+            SupervisedFollowerMut::Remote(f) => f.most_recent_mouse_move,
         }
     }
 
