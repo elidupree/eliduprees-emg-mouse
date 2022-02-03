@@ -37,7 +37,13 @@ pub enum MessageToSupervisor {
 // struct Signals {
 //     signals: Vec<Signal>,
 // }
-// struct Signal {}
+#[derive(Default)]
+struct Signal {
+    total_inputs: usize,
+    recent: VecDeque<f64>,
+    history: VecDeque<HistoryFrame>,
+    frequencies_history: VecDeque<Vec<f64>>,
+}
 
 pub struct Supervisor {
     start_time: Instant,
@@ -51,14 +57,74 @@ pub struct Supervisor {
 
     receiver: Receiver<MessageToSupervisor>,
 
+    signals: [Signal; 4],
+
     enabled: bool,
     mouse_pressed: bool,
-    recent: VecDeque<f64>,
-    history: VecDeque<HistoryFrame>,
-    frequencies_history: VecDeque<Vec<f64>>,
     last_activation: Instant,
 
     fft_planner: FftPlanner<f64>,
+}
+
+impl Signal {
+    fn new() -> Signal {
+        Signal::default()
+    }
+    fn receive_raw(
+        &mut self,
+        raw_value: u16,
+        remote_time_since_start: Duration,
+        fft_planner: &mut FftPlanner<f64>,
+    ) {
+        self.total_inputs += 1;
+        self.recent.push_back(raw_value as f64 / 1500.0);
+        if self.recent.len() > 50 {
+            self.recent.pop_front();
+        }
+
+        if self.recent.len() == 50 && self.total_inputs % 10 == 0 {
+            let fft = fft_planner.plan_fft_forward(50);
+
+            let mut buffer: Vec<_> = self
+                .recent
+                .iter()
+                .map(|&re| Complex { re, im: 0.0 })
+                .collect();
+            fft.process(&mut buffer);
+            self.frequencies_history
+                .push_back(buffer.into_iter().map(|c| c.re).collect());
+            if self.frequencies_history.len() > 80 {
+                self.frequencies_history.pop_front();
+            }
+        }
+
+        let mean = self.recent.iter().sum::<f64>() / self.recent.len() as f64;
+        let variance =
+            self.recent.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / self.recent.len() as f64;
+
+        let value = variance.sqrt(); //report.inputs[2] as f64 / 1000.0;
+        let time = remote_time_since_start.as_secs_f64();
+        let recent_values = self
+            .history
+            .iter()
+            .filter(|frame| {
+                (time - 0.3..time - 0.1).contains(&frame.time) &&
+                    // when we've analyzed something as a spike, also do not count it among the noise
+                    frame.value < frame.click_threshold
+            })
+            .map(|frame| frame.value);
+        let recent_max = recent_values
+            .max_by_key(|&v| OrderedFloat(v))
+            .unwrap_or(1.0);
+
+        self.history.push_back(HistoryFrame {
+            time,
+            value,
+            click_threshold: recent_max + 0.005,
+            too_much_threshold: recent_max + 0.06,
+        });
+        self.history.retain(|frame| frame.time >= time - 0.8);
+    }
 }
 
 impl Supervisor {
@@ -104,8 +170,8 @@ impl Supervisor {
                 )
             }))
             .collect(),
-            history: self.history.clone(),
-            frequencies_history: self.frequencies_history.clone(),
+            history: self.signals[2].history.clone(),
+            frequencies_history: self.signals[2].frequencies_history.clone(),
         }));
     }
     fn handle_message(&mut self, message: MessageToSupervisor) {
@@ -151,53 +217,11 @@ impl Supervisor {
         self.local_follower.update_most_recent_mouse_move();
         self.update_active_follower();
 
-        self.recent.push_back(report.inputs[2] as f64 / 1500.0);
-        if self.recent.len() > 50 {
-            self.recent.pop_front();
+        for (signal, &input) in self.signals.iter_mut().zip(&report.inputs) {
+            signal.receive_raw(input, report.time_since_start, &mut self.fft_planner)
         }
 
-        if self.recent.len() == 50 && self.total_inputs % 10 == 0 {
-            let fft = self.fft_planner.plan_fft_forward(50);
-
-            let mut buffer: Vec<_> = self
-                .recent
-                .iter()
-                .map(|&re| Complex { re, im: 0.0 })
-                .collect();
-            fft.process(&mut buffer);
-            self.frequencies_history
-                .push_back(buffer.into_iter().map(|c| c.re).collect());
-            if self.frequencies_history.len() > 80 {
-                self.frequencies_history.pop_front();
-            }
-        }
-
-        let mean = self.recent.iter().sum::<f64>() / self.recent.len() as f64;
-        let variance =
-            self.recent.iter().map(|&v| (v - mean).powi(2)).sum::<f64>() / self.recent.len() as f64;
-
-        let value = variance.sqrt(); //report.inputs[2] as f64 / 1000.0;
-        let time = report.time_since_start.as_secs_f64();
-        let recent_values = self
-            .history
-            .iter()
-            .filter(|frame| {
-                (time - 0.3..time - 0.1).contains(&frame.time) &&
-                    // when we've analyzed something as a spike, also do not count it among the noise
-                    frame.value < frame.click_threshold
-            })
-            .map(|frame| frame.value);
-        let recent_max = recent_values
-            .max_by_key(|&v| OrderedFloat(v))
-            .unwrap_or(1.0);
-
-        self.history.push_back(HistoryFrame {
-            time,
-            value,
-            click_threshold: recent_max + 0.005,
-            too_much_threshold: recent_max + 0.06,
-        });
-        self.history.retain(|frame| frame.time >= time - 0.8);
+        let &HistoryFrame { time, value, .. } = self.signals[2].history.back().unwrap();
 
         let unclick_possible = value < 0.35;
         if !unclick_possible {
@@ -210,11 +234,11 @@ impl Supervisor {
                 self.mouse_pressed = false;
             }
         } else {
-            let click_possible = self.history.iter().any(|frame| {
+            let click_possible = self.signals[2].history.iter().any(|frame| {
                 (time - 0.03..time - 0.02).contains(&frame.time)
                     && frame.value > frame.click_threshold
             });
-            let too_much = self
+            let too_much = self.signals[2]
                 .history
                 .iter()
                 .any(|frame| frame.time >= time - 0.3 && frame.value > frame.too_much_threshold);
@@ -338,9 +362,8 @@ impl Supervisor {
             receiver,
             enabled: false,
             mouse_pressed: false,
-            recent: VecDeque::new(),
-            history: VecDeque::new(),
-            frequencies_history: VecDeque::new(),
+
+            signals: [Signal::new(), Signal::new(), Signal::new(), Signal::new()],
             last_activation: Instant::now(),
             fft_planner: FftPlanner::new(),
         }
