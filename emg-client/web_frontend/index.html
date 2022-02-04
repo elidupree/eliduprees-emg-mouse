@@ -30,10 +30,10 @@ enabled_checkbox.addEventListener("click", e => {
 
       function update_canvas(data) {
         context.clearRect (0, 0, canvas.width, canvas.height);
-        const last = data.history[data.history.length - 1];
-        function print_line (key) {
+        function print_line (history, key) {
+            const last = history[history.length - 1];
             context.beginPath();
-            data.history.forEach((frame, index) => {
+            history.forEach((frame, index) => {
               const x = canvas.width * (1.0 - (last.time - frame.time) / 0.8);
               const y = (-Math.log(frame [key] * 0.999 + 0.001) / Math.log(0.001) + 1) * canvas.height / 2;
               if (index == 0) {
@@ -44,12 +44,23 @@ enabled_checkbox.addEventListener("click", e => {
             });
             context.stroke();
         }
-        context.strokeStyle = "black";
-        print_line ("value");
+        colors = ["#ffbb00", "#ff88ff", "#000000", "#55ffff"];
+        data.histories.forEach((history, index) => {
+            context.strokeStyle = colors[index];
+            print_line (history, "value");
+        });
         context.strokeStyle = "#88ff88";
-        print_line ("click_threshold");
+        data.histories.forEach((history, index) => {
+            if (index == 2) {
+                print_line (history, "click_threshold");
+            }
+        });
         context.strokeStyle = "#ff8888";
-        print_line ("too_much_threshold");
+        data.histories.forEach((history, index) => {
+            if (index == 2) {
+                print_line (history, "too_much_threshold");
+            }
+        });
 
             data.frequencies_history.forEach((frequencies, time_index) => {
             const box_width = canvas.width / data.frequencies_history.length;

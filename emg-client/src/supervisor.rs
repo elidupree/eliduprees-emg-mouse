@@ -170,7 +170,7 @@ impl Supervisor {
                 )
             }))
             .collect(),
-            history: self.signals[2].history.clone(),
+            histories: self.signals.iter().map(|s| s.history.clone()).collect(),
             frequencies_history: self.signals[2].frequencies_history.clone(),
         }));
     }

@@ -18,6 +18,6 @@ pub struct HistoryFrame {
 pub struct FrontendState {
     pub enabled: bool,
     pub followers: Vec<(String, f64)>,
-    pub history: VecDeque<HistoryFrame>,
+    pub histories: Vec<VecDeque<HistoryFrame>>,
     pub frequencies_history: VecDeque<Vec<f64>>,
 }
