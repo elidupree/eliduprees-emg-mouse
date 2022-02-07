@@ -8,6 +8,7 @@ use emg_mouse_shared::ReportFromServer;
 use ordered_float::OrderedFloat;
 use rustfft::num_complex::Complex;
 use rustfft::FftPlanner;
+use statrs::statistics::Statistics;
 use std::collections::{HashMap, VecDeque};
 use std::io::BufReader;
 use std::net::{TcpListener, TcpStream};
@@ -72,12 +73,12 @@ impl Signal {
     }
     fn receive_raw(
         &mut self,
-        raw_value: u16,
+        raw_value: f64,
         remote_time_since_start: Duration,
         fft_planner: &mut FftPlanner<f64>,
     ) {
         self.total_inputs += 1;
-        self.recent.push_back(raw_value as f64 / 1500.0);
+        self.recent.push_back(raw_value / 1500.0);
         if self.recent.len() > 50 {
             self.recent.pop_front();
         }
@@ -217,8 +218,13 @@ impl Supervisor {
         self.local_follower.update_most_recent_mouse_move();
         self.update_active_follower();
 
+        let average = report.inputs.iter().map(|&i| i as f64).mean();
         for (signal, &input) in self.signals.iter_mut().zip(&report.inputs) {
-            signal.receive_raw(input, report.time_since_start, &mut self.fft_planner)
+            signal.receive_raw(
+                input as f64 - average,
+                report.time_since_start,
+                &mut self.fft_planner,
+            )
         }
 
         let &HistoryFrame { time, value, .. } = self.signals[2].history.back().unwrap();
