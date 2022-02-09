@@ -33,7 +33,7 @@ impl Signal {
             self.recent_raw_inputs.pop_front();
         }
 
-        const FFT_WINDOW: usize = 150;
+        const FFT_WINDOW: usize = 50;
         const FRAMES_PER_FFT: usize = 10;
         if self.recent_raw_inputs.len() >= FFT_WINDOW && self.total_inputs % FRAMES_PER_FFT == 0 {
             let fft = fft_planner.plan_fft_forward(FFT_WINDOW);
@@ -46,11 +46,11 @@ impl Signal {
                 .map(|&re| Complex { re, im: 0.0 })
                 .collect();
             fft.process(&mut buffer);
-            let mut values: Vec<f64> = buffer.into_iter().skip(1).map(|c| c.re).collect();
-            let scale = 1.0 / values.iter().max_by_key(|&&f| OrderedFloat(f)).unwrap();
-            for value in &mut values {
-                *value *= scale;
-            }
+            let values: Vec<f64> = buffer.into_iter().skip(1).map(|c| c.norm()).collect();
+            // let scale = 1.0 / values.iter().max_by_key(|&&f| OrderedFloat(f)).unwrap();
+            // for value in &mut values {
+            //     *value *= scale;
+            // }
             self.frequencies_history.push_back(values);
             if self.frequencies_history.len() > 800 / FRAMES_PER_FFT {
                 self.frequencies_history.pop_front();

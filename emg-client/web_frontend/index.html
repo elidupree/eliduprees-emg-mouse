@@ -35,7 +35,9 @@ enabled_checkbox.addEventListener("click", e => {
             context.beginPath();
             history.forEach((frame, index) => {
               const x = canvas.width * (1.0 - (last.time - frame.time) / 0.8 + history_index) / data.histories.length;
-              const y = (-Math.log(frame [key] * 0.999 + 0.001) / Math.log(0.001) + 1) * canvas.height / 2;
+              let y = frame [key];
+              y = (-Math.log(y * 0.999 + 0.001) / Math.log(0.001) + 1)
+              y *= canvas.height / 2;
               if (index == 0) {
                 context.moveTo(x,y)
                  } else {
@@ -63,7 +65,7 @@ enabled_checkbox.addEventListener("click", e => {
             const box_height = canvas.height / data.frequencies_history [0].length / 2;
             frequencies.forEach((intensity, frequency_index) => {
     context.fillStyle = `rgb(
-        ${Math.floor(255 * intensity)},
+        ${Math.floor(255 * intensity * 5)},
         ${Math.floor(255 * intensity)},
         0)`;
     context.fillRect(time_index * box_width, frequency_index * box_height+ canvas.height / 2, box_width, box_height);
