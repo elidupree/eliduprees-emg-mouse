@@ -6,6 +6,7 @@ extern crate rocket;
 mod follower;
 mod remote_time_estimator;
 mod rocket_glue;
+mod signal;
 mod supervisor;
 mod utils;
 mod webserver;
