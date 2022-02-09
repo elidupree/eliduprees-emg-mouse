@@ -30,6 +30,8 @@ enabled_checkbox.addEventListener("click", e => {
 
       function update_canvas(data) {
         context.clearRect (0, 0, canvas.width, canvas.height);
+        context.fillStyle = "black";
+        context.fillRect(0, canvas.height/2, canvas.width, canvas.height);
         function print_line (history_index, history, key) {
             const last = history[history.length - 1];
             context.beginPath();
@@ -46,7 +48,7 @@ enabled_checkbox.addEventListener("click", e => {
             });
             context.stroke();
         }
-        colors = ["#888800", "#880088", "#000000", "#008888"];
+        const colors = ["#888800", "#880088", "#000000", "#008888"];
         data.histories.forEach((history, index) => {
             context.strokeStyle = colors[index];
             print_line (index,history, "value");
@@ -60,17 +62,22 @@ enabled_checkbox.addEventListener("click", e => {
                 print_line (index,history, "too_much_threshold");
         });
 
-            data.frequencies_history.forEach((frequencies, time_index) => {
-            const box_width = canvas.width / data.frequencies_history.length;
-            const box_height = canvas.height / data.frequencies_history [0].length / 2;
-            frequencies.forEach((intensity, frequency_index) => {
-    context.fillStyle = `rgb(
-        ${Math.floor(255 * intensity * 5)},
-        ${Math.floor(255 * intensity)},
-        0)`;
-    context.fillRect(time_index * box_width, frequency_index * box_height+ canvas.height / 2, box_width, box_height);
-  })
-})
+        const freq_colors = [[1, 5, 0], [5, 0, 1], [5, 1, 0], [0, 1, 5]];
+        data.frequencies_histories.forEach((frequencies_history, history_index) => {
+            const fc = freq_colors[history_index];
+            frequencies_history.forEach((frequencies, time_index) => {
+                const box_width = canvas.width / frequencies_history.length / data.frequencies_histories.length;
+                const box_height = canvas.height / frequencies_history [0].length / 2;
+                frequencies.forEach((intensity, frequency_index) => {
+                    const ic = 255 * intensity;
+                    context.fillStyle = `rgb(
+                        ${Math.floor(ic * fc[0])},
+                        ${Math.floor(ic * fc[1])},
+                        ${Math.floor(ic * fc[2])})`;
+                    context.fillRect(time_index * box_width + history_index * canvas.width / data.frequencies_histories.length, frequency_index * box_height+ canvas.height / 2, box_width, box_height);
+                })
+            })
+        })
       }
       function update_followers(data) {
         const ids = {};

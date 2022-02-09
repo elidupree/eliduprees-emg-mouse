@@ -99,7 +99,11 @@ impl Supervisor {
             }))
             .collect(),
             histories: self.signals.iter().map(|s| s.history.clone()).collect(),
-            frequencies_history: self.signals[2].frequencies_history.clone(),
+            frequencies_histories: self
+                .signals
+                .iter()
+                .map(|s| s.frequencies_history.clone())
+                .collect(),
         }));
     }
     fn handle_message(&mut self, message: MessageToSupervisor) {

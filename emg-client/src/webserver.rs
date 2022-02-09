@@ -19,5 +19,5 @@ pub struct FrontendState {
     pub enabled: bool,
     pub followers: Vec<(String, f64)>,
     pub histories: Vec<VecDeque<HistoryFrame>>,
-    pub frequencies_history: VecDeque<Vec<f64>>,
+    pub frequencies_histories: Vec<VecDeque<Vec<f64>>>,
 }
