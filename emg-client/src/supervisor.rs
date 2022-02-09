@@ -218,10 +218,10 @@ impl Supervisor {
         self.local_follower.update_most_recent_mouse_move();
         self.update_active_follower();
 
-        let average = report.inputs.iter().map(|&i| i as f64).mean();
+        let _average = report.inputs.iter().map(|&i| i as f64).mean();
         for (signal, &input) in self.signals.iter_mut().zip(&report.inputs) {
             signal.receive_raw(
-                input as f64 - average,
+                input as f64, /*- average*/
                 report.time_since_start,
                 &mut self.fft_planner,
             )
