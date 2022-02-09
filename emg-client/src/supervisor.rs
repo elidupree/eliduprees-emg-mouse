@@ -154,41 +154,40 @@ impl Supervisor {
             )
         }
 
-        let &HistoryFrame { time, value, .. } = self.signals[2].history.back().unwrap();
-
-        let unclick_possible = value < 0.35;
-        if !unclick_possible {
-            self.last_activation = Instant::now();
-        }
-        if self.mouse_pressed {
-            if unclick_possible && (Instant::now() - self.last_activation) > unclick_cooldown {
-                assert!(self.enabled);
-                self.active_follower().mouse_up();
-                self.mouse_pressed = false;
-            }
-        } else {
-            let click_possible = self.signals[2].history.iter().any(|frame| {
-                (time - 0.03..time - 0.02).contains(&frame.time)
-                    && frame.value > frame.click_threshold
-            });
-            let too_much = self.signals[2]
-                .history
-                .iter()
-                .any(|frame| frame.time >= time - 0.3 && frame.value > frame.too_much_threshold);
-            let move_time = self.active_follower().most_recent_mouse_move();
-            let recently_moved = (Instant::now() - move_time) < Duration::from_millis(100);
-            let anywhere_near_recently_moved =
-                (Instant::now() - move_time) < Duration::from_millis(10000);
-            if self.enabled
-                && click_possible
-                && !too_much
-                && !recently_moved
-                && anywhere_near_recently_moved
-                && (Instant::now() - self.last_activation) > click_cooldown
-            {
+        if let Some(&HistoryFrame { time, value, .. }) = self.signals[2].history.back() {
+            let unclick_possible = value < 0.35;
+            if !unclick_possible {
                 self.last_activation = Instant::now();
-                self.active_follower().mousedown();
-                self.mouse_pressed = true;
+            }
+            if self.mouse_pressed {
+                if unclick_possible && (Instant::now() - self.last_activation) > unclick_cooldown {
+                    assert!(self.enabled);
+                    self.active_follower().mouse_up();
+                    self.mouse_pressed = false;
+                }
+            } else {
+                let click_possible = self.signals[2].history.iter().any(|frame| {
+                    (time - 0.03..time - 0.02).contains(&frame.time)
+                        && frame.value > frame.click_threshold
+                });
+                let too_much = self.signals[2].history.iter().any(|frame| {
+                    frame.time >= time - 0.3 && frame.value > frame.too_much_threshold
+                });
+                let move_time = self.active_follower().most_recent_mouse_move();
+                let recently_moved = (Instant::now() - move_time) < Duration::from_millis(100);
+                let anywhere_near_recently_moved =
+                    (Instant::now() - move_time) < Duration::from_millis(10000);
+                if self.enabled
+                    && click_possible
+                    && !too_much
+                    && !recently_moved
+                    && anywhere_near_recently_moved
+                    && (Instant::now() - self.last_activation) > click_cooldown
+                {
+                    self.last_activation = Instant::now();
+                    self.active_follower().mousedown();
+                    self.mouse_pressed = true;
+                }
             }
         }
 
