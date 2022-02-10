@@ -1,4 +1,5 @@
 use crate::webserver::HistoryFrame;
+use itertools::Itertools;
 use ordered_float::OrderedFloat;
 use rustfft::num_complex::Complex;
 use rustfft::FftPlanner;
@@ -58,7 +59,7 @@ impl Signal {
         }
 
         const VALUE_WINDOW: usize = 50;
-        if self.recent_raw_inputs.len() > VALUE_WINDOW {
+        if self.recent_raw_inputs.len() >= VALUE_WINDOW {
             let fft = fft_planner.plan_fft_forward(VALUE_WINDOW);
             let mut buffer: Vec<_> = self
                 .recent_raw_inputs
@@ -85,26 +86,84 @@ impl Signal {
             //     .std_dev();
 
             let time = remote_time_since_start.as_secs_f64();
-            let recent_values = self
-                .history
-                .iter()
-                .filter(|frame| {
-                    (time - 0.3..time - 0.1).contains(&frame.time) &&
-                        // when we've analyzed something as a spike, also do not count it among the noise
-                        frame.value < frame.click_threshold
-                })
-                .map(|frame| frame.value);
-            let recent_max = recent_values
-                .max_by_key(|&v| OrderedFloat(v))
-                .unwrap_or(1.0);
+
+            const CHUNK_SIZE: usize = 500;
+            let (click_threshold, too_much_threshold) = if self.total_inputs % CHUNK_SIZE == 0 {
+                let recent_values: Vec<f64> = std::iter::once(value)
+                    .chain(
+                        self.history
+                            .iter()
+                            .rev()
+                            .take_while(|f| f.time >= time - 3.0)
+                            .map(|f| f.value),
+                    )
+                    .collect();
+                let max_spike_permitted: f64 = recent_values
+                    .iter()
+                    .copied()
+                    .chunks(CHUNK_SIZE)
+                    .into_iter()
+                    .map(|chunk| {
+                        let sorted: Vec<f64> = chunk.sorted_by_key(|&f| OrderedFloat(f)).collect();
+                        let a = sorted[sorted.len() / 8];
+                        let b = sorted[sorted.len() * 7 / 8];
+                        let d = b - a;
+                        b + d * 2.0
+                    })
+                    .min_by_key(|&f| OrderedFloat(f))
+                    .unwrap();
+
+                let sorted: Vec<f64> = recent_values
+                    .iter()
+                    .copied()
+                    .sorted_by_key(|&f| OrderedFloat(f))
+                    .collect();
+                let a = sorted[sorted.len() / 8];
+                let b = sorted[sorted.len() * 7 / 8];
+                let d = b - a;
+
+                let is_idle = self
+                    .history
+                    .iter()
+                    .rev()
+                    .take_while(|f| f.time >= time - 3.0)
+                    .all(|f| f.value <= max_spike_permitted);
+
+                if is_idle {
+                    (max_spike_permitted, max_spike_permitted + d * 8.0)
+                } else if let Some(back) = self.history.back() {
+                    (back.click_threshold, back.too_much_threshold)
+                } else {
+                    (0.0, 0.0)
+                }
+            } else if let Some(back) = self.history.back() {
+                (back.click_threshold, back.too_much_threshold)
+            } else {
+                (0.0, 0.0)
+            };
+
+            // let recent_values = self
+            //     .history
+            //     .iter()
+            //     .filter(|frame| {
+            //         (time - 0.3..time - 0.1).contains(&frame.time) &&
+            //             // when we've analyzed something as a spike, also do not count it among the noise
+            //             frame.value < frame.click_threshold
+            //     })
+            //     .map(|frame| frame.value);
+            // let recent_max = recent_values
+            //     .max_by_key(|&v| OrderedFloat(v))
+            //     .unwrap_or(1.0);
 
             self.history.push_back(HistoryFrame {
                 time,
                 value,
-                click_threshold: recent_max + 0.01,
-                too_much_threshold: recent_max + 0.25,
+                click_threshold,
+                too_much_threshold,
             });
-            self.history.retain(|frame| frame.time >= time - 0.8);
+            while self.history.front().unwrap().time < time - 3.0 {
+                self.history.pop_front();
+            }
         }
     }
 }

@@ -85,6 +85,7 @@ impl Supervisor {
     }
     fn update_frontend(&mut self) {
         let start_time = self.start_time;
+        let latest_time = self.signals[0].history.back().map_or(0.0, |f| f.time);
         self.frontend_state_updater.store(Some(FrontendState {
             enabled: self.enabled,
             followers: std::iter::once((
@@ -98,7 +99,17 @@ impl Supervisor {
                 )
             }))
             .collect(),
-            histories: self.signals.iter().map(|s| s.history.clone()).collect(),
+            histories: self
+                .signals
+                .iter()
+                .map(|s| {
+                    s.history
+                        .iter()
+                        .filter(|f| f.time >= latest_time - 0.8)
+                        .cloned()
+                        .collect()
+                })
+                .collect(),
             frequencies_histories: self
                 .signals
                 .iter()
