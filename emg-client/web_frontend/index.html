@@ -38,7 +38,7 @@ enabled_checkbox.addEventListener("click", e => {
             history.forEach((frame, index) => {
               const x = canvas.width * (1.0 - (last.time - frame.time) / 0.8 + history_index) / data.histories.length;
               let y = frame [key];
-              y = (-Math.log(y * 0.999 + 0.001) / Math.log(0.001) + 1)
+              y = (-Math.log(y * 0.99 + 0.01) / Math.log(0.01) + 1)
               y *= canvas.height / 2;
               if (index == 0) {
                 context.moveTo(x,y)
@@ -62,7 +62,7 @@ enabled_checkbox.addEventListener("click", e => {
                 print_line (index,history, "too_much_threshold");
         });
 
-        const freq_colors = [[1, 5, 0], [5, 0, 1], [5, 1, 0], [0, 1, 5]];
+        const freq_colors = [[1, 15, 0], [15, 0, 1], [5, 1, 0], [0, 2, 15]];
         data.frequencies_histories.forEach((frequencies_history, history_index) => {
             const fc = freq_colors[history_index];
             frequencies_history.forEach((frequencies, time_index) => {

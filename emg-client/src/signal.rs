@@ -59,12 +59,30 @@ impl Signal {
 
         const VALUE_WINDOW: usize = 50;
         if self.recent_raw_inputs.len() > VALUE_WINDOW {
-            let value = self
+            let fft = fft_planner.plan_fft_forward(VALUE_WINDOW);
+            let mut buffer: Vec<_> = self
                 .recent_raw_inputs
                 .iter()
                 .rev()
                 .take(VALUE_WINDOW)
-                .std_dev();
+                .map(|&re| Complex { re, im: 0.0 })
+                .collect();
+            fft.process(&mut buffer);
+            let values: Vec<f64> = buffer.into_iter().skip(1).map(|c| c.norm_sqr()).collect();
+            let musc = values[4..=5]
+                .iter()
+                .chain(&values[7..=8])
+                .chain(&values[10..15])
+                .mean();
+            let etc = values[15..35].mean();
+            let value = if musc > etc { (musc - etc).sqrt() } else { 0.0 };
+
+            // let value = self
+            //     .recent_raw_inputs
+            //     .iter()
+            //     .rev()
+            //     .take(VALUE_WINDOW)
+            //     .std_dev();
 
             let time = remote_time_since_start.as_secs_f64();
             let recent_values = self
@@ -83,8 +101,8 @@ impl Signal {
             self.history.push_back(HistoryFrame {
                 time,
                 value,
-                click_threshold: recent_max + 0.005,
-                too_much_threshold: recent_max + 0.06,
+                click_threshold: recent_max + 0.01,
+                too_much_threshold: recent_max + 0.25,
             });
             self.history.retain(|frame| frame.time >= time - 0.8);
         }
