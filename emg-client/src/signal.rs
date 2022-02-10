@@ -113,15 +113,6 @@ impl Signal {
                     .min_by_key(|&f| OrderedFloat(f))
                     .unwrap();
 
-                let sorted: Vec<f64> = recent_values
-                    .iter()
-                    .copied()
-                    .sorted_by_key(|&f| OrderedFloat(f))
-                    .collect();
-                let a = sorted[sorted.len() / 8];
-                let b = sorted[sorted.len() * 7 / 8];
-                let d = b - a;
-
                 let is_idle = self
                     .history
                     .iter()
@@ -130,7 +121,16 @@ impl Signal {
                     .all(|f| f.value <= max_spike_permitted);
 
                 if is_idle {
-                    (max_spike_permitted, max_spike_permitted + d * 8.0)
+                    let sorted: Vec<f64> = recent_values
+                        .iter()
+                        .copied()
+                        .sorted_by_key(|&f| OrderedFloat(f))
+                        .collect();
+                    let a = sorted[sorted.len() / 8];
+                    let b = sorted[sorted.len() * 7 / 8];
+                    let d = b - a;
+
+                    (b + d * 1.4, b + d * 15.0)
                 } else if let Some(back) = self.history.back() {
                     (back.activity_threshold, back.too_much_threshold)
                 } else {
