@@ -88,7 +88,7 @@ impl Signal {
             let time = remote_time_since_start.as_secs_f64();
 
             const CHUNK_SIZE: usize = 500;
-            let (click_threshold, too_much_threshold) = if self.total_inputs % CHUNK_SIZE == 0 {
+            let (activity_threshold, too_much_threshold) = if self.total_inputs % CHUNK_SIZE == 0 {
                 let recent_values: Vec<f64> = std::iter::once(value)
                     .chain(
                         self.history
@@ -132,12 +132,12 @@ impl Signal {
                 if is_idle {
                     (max_spike_permitted, max_spike_permitted + d * 8.0)
                 } else if let Some(back) = self.history.back() {
-                    (back.click_threshold, back.too_much_threshold)
+                    (back.activity_threshold, back.too_much_threshold)
                 } else {
                     (0.0, 0.0)
                 }
             } else if let Some(back) = self.history.back() {
-                (back.click_threshold, back.too_much_threshold)
+                (back.activity_threshold, back.too_much_threshold)
             } else {
                 (0.0, 0.0)
             };
@@ -148,7 +148,7 @@ impl Signal {
             //     .filter(|frame| {
             //         (time - 0.3..time - 0.1).contains(&frame.time) &&
             //             // when we've analyzed something as a spike, also do not count it among the noise
-            //             frame.value < frame.click_threshold
+            //             frame.value < frame.activity_threshold
             //     })
             //     .map(|frame| frame.value);
             // let recent_max = recent_values
@@ -158,7 +158,7 @@ impl Signal {
             self.history.push_back(HistoryFrame {
                 time,
                 value,
-                click_threshold,
+                activity_threshold,
                 too_much_threshold,
             });
             while self.history.front().unwrap().time < time - 3.0 {

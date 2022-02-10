@@ -183,7 +183,7 @@ impl Supervisor {
             } else {
                 let click_possible = self.signals[2].history.iter().any(|frame| {
                     (time - 0.03..time - 0.02).contains(&frame.time)
-                        && frame.value > frame.click_threshold
+                        && frame.value > frame.activity_threshold
                 });
                 let too_much = self.signals[2].history.iter().any(|frame| {
                     frame.time >= time - 0.3 && frame.value > frame.too_much_threshold

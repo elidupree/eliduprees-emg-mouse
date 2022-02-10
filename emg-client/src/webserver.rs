@@ -10,7 +10,7 @@ pub enum MessageFromFrontend {
 pub struct HistoryFrame {
     pub time: f64,
     pub value: f64,
-    pub click_threshold: f64,
+    pub activity_threshold: f64,
     pub too_much_threshold: f64,
 }
 
