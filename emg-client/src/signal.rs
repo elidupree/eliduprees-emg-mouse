@@ -10,17 +10,34 @@ use std::time::Duration;
 // struct Signals {
 //     signals: Vec<Signal>,
 // }
+
+pub enum ActiveState {
+    Active { last_sustained: f64 },
+    Inactive { last_deactivated: f64 },
+}
+
 #[derive(Default)]
 pub struct Signal {
     pub total_inputs: usize,
     pub recent_raw_inputs: VecDeque<f64>,
     pub history: VecDeque<HistoryFrame>,
     pub frequencies_history: VecDeque<Vec<f64>>,
+    pub active_state: ActiveState,
 }
 
+impl Default for ActiveState {
+    fn default() -> Self {
+        ActiveState::Inactive {
+            last_deactivated: 0.0,
+        }
+    }
+}
 impl Signal {
     pub fn new() -> Signal {
         Signal::default()
+    }
+    pub fn is_active(&self) -> bool {
+        matches!(self.active_state, ActiveState::Active { .. })
     }
     pub fn receive_raw(
         &mut self,
@@ -163,6 +180,44 @@ impl Signal {
             });
             while self.history.front().unwrap().time < time - 3.0 {
                 self.history.pop_front();
+            }
+
+            match self.active_state {
+                ActiveState::Active { last_sustained } => {
+                    if value > activity_threshold {
+                        self.active_state = ActiveState::Active {
+                            last_sustained: time,
+                        };
+                    } else if time > last_sustained + 0.1 {
+                        self.active_state = ActiveState::Inactive {
+                            last_deactivated: time,
+                        };
+                    }
+                }
+                ActiveState::Inactive { last_deactivated } => {
+                    if time > last_deactivated + 0.4 && value > activity_threshold {
+                        if self
+                            .history
+                            .iter()
+                            .rev()
+                            .skip(60)
+                            .take(60)
+                            .any(|f| f.value > f.activity_threshold)
+                        {
+                            if self
+                                .history
+                                .iter()
+                                .rev()
+                                .take(120)
+                                .all(|f| f.value < f.too_much_threshold)
+                            {
+                                self.active_state = ActiveState::Active {
+                                    last_sustained: time,
+                                };
+                            }
+                        }
+                    }
+                }
             }
         }
     }

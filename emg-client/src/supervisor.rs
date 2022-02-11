@@ -3,7 +3,7 @@ use crate::follower::{
     SupervisedFollowerMut,
 };
 use crate::signal::Signal;
-use crate::webserver::{FrontendState, HistoryFrame, MessageFromFrontend};
+use crate::webserver::{FrontendState, MessageFromFrontend};
 use crossbeam::atomic::AtomicCell;
 use emg_mouse_shared::ReportFromServer;
 use rustfft::FftPlanner;
@@ -50,7 +50,6 @@ pub struct Supervisor {
 
     enabled: bool,
     mouse_pressed: bool,
-    last_activation: Instant,
 
     fft_planner: FftPlanner<f64>,
 }
@@ -154,13 +153,12 @@ impl Supervisor {
         }
     }
     fn handle_report(&mut self, report: ReportFromServer) {
-        let click_cooldown = Duration::from_millis(800);
-        let unclick_cooldown = Duration::from_millis(200);
-
         self.local_follower.update_most_recent_mouse_move();
         self.update_active_follower();
 
         let _average = report.inputs.iter().map(|&i| i as f64).mean();
+
+        let mouse_active_before = self.signals[2].is_active();
         for (signal, &input) in self.signals.iter_mut().zip(&report.inputs) {
             signal.receive_raw(
                 input as f64, /*- average*/
@@ -169,39 +167,21 @@ impl Supervisor {
             )
         }
 
-        if let Some(&HistoryFrame { time, value, .. }) = self.signals[2].history.back() {
-            let unclick_possible = value < 0.35;
-            if !unclick_possible {
-                self.last_activation = Instant::now();
-            }
-            if self.mouse_pressed {
-                if unclick_possible && (Instant::now() - self.last_activation) > unclick_cooldown {
+        if self.signals[2].is_active() != mouse_active_before {
+            if self.signals[2].is_active() {
+                let move_time = self.active_follower().most_recent_mouse_move();
+                let recently_moved = (Instant::now() - move_time) < Duration::from_millis(50);
+                let anywhere_near_recently_moved =
+                    (Instant::now() - move_time) < Duration::from_millis(10000);
+                if self.enabled && !recently_moved && anywhere_near_recently_moved {
+                    self.active_follower().mousedown();
+                    self.mouse_pressed = true;
+                }
+            } else {
+                if self.mouse_pressed {
                     assert!(self.enabled);
                     self.active_follower().mouse_up();
                     self.mouse_pressed = false;
-                }
-            } else {
-                let click_possible = self.signals[2].history.iter().any(|frame| {
-                    (time - 0.03..time - 0.02).contains(&frame.time)
-                        && frame.value > frame.activity_threshold
-                });
-                let too_much = self.signals[2].history.iter().any(|frame| {
-                    frame.time >= time - 0.3 && frame.value > frame.too_much_threshold
-                });
-                let move_time = self.active_follower().most_recent_mouse_move();
-                let recently_moved = (Instant::now() - move_time) < Duration::from_millis(100);
-                let anywhere_near_recently_moved =
-                    (Instant::now() - move_time) < Duration::from_millis(10000);
-                if self.enabled
-                    && click_possible
-                    && !too_much
-                    && !recently_moved
-                    && anywhere_near_recently_moved
-                    && (Instant::now() - self.last_activation) > click_cooldown
-                {
-                    self.last_activation = Instant::now();
-                    self.active_follower().mousedown();
-                    self.mouse_pressed = true;
                 }
             }
         }
@@ -311,7 +291,6 @@ impl Supervisor {
             mouse_pressed: false,
 
             signals: [Signal::new(), Signal::new(), Signal::new(), Signal::new()],
-            last_activation: Instant::now(),
             fft_planner: FftPlanner::new(),
         }
     }
