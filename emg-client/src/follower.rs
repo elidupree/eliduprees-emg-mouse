@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 pub enum MessageToFollower {
     Mousedown,
     MouseUp,
+    ScrollY(i32),
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
@@ -44,15 +45,18 @@ pub trait Follower {
         match message {
             MessageToFollower::Mousedown => self.mousedown(),
             MessageToFollower::MouseUp => self.mouse_up(),
+            MessageToFollower::ScrollY(length) => self.scroll_y(length),
         }
     }
 
     fn mousedown(&mut self) {
         self.handle_message(MessageToFollower::Mousedown)
     }
-
     fn mouse_up(&mut self) {
         self.handle_message(MessageToFollower::MouseUp)
+    }
+    fn scroll_y(&mut self, length: i32) {
+        self.handle_message(MessageToFollower::ScrollY(length))
     }
 }
 
@@ -80,6 +84,10 @@ impl Follower for LocalFollower {
             .play_raw(self.unclick_sound.clone())
             .unwrap();
     }
+
+    fn scroll_y(&mut self, length: i32) {
+        self.enigo.mouse_scroll_y(length);
+    }
 }
 impl Follower for RemoteFollower {
     fn handle_message(&mut self, message: MessageToFollower) {
@@ -103,13 +111,6 @@ impl LocalFollower {
             click_sound,
             unclick_sound,
             most_recent_mouse_location: (-1, -1),
-        }
-    }
-
-    pub fn handle_message(&mut self, message: MessageToFollower) {
-        match message {
-            MessageToFollower::Mousedown => self.mousedown(),
-            MessageToFollower::MouseUp => self.mouse_up(),
         }
     }
 
@@ -179,9 +180,11 @@ impl<F: Follower> SupervisedFollower<F> {
     pub fn mousedown(&mut self) {
         self.follower.mousedown()
     }
-
     pub fn mouse_up(&mut self) {
         self.follower.mouse_up()
+    }
+    pub fn scroll_y(&mut self, length: i32) {
+        self.follower.scroll_y(length)
     }
 }
 
@@ -226,6 +229,13 @@ impl<'a> SupervisedFollowerMut<'a> {
         match self {
             SupervisedFollowerMut::Local(f) => f.mouse_up(),
             SupervisedFollowerMut::Remote(f) => f.mouse_up(),
+        }
+    }
+
+    pub fn scroll_y(&mut self, length: i32) {
+        match self {
+            SupervisedFollowerMut::Local(f) => f.scroll_y(length),
+            SupervisedFollowerMut::Remote(f) => f.scroll_y(length),
         }
     }
 }

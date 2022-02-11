@@ -186,6 +186,17 @@ impl Supervisor {
             }
         }
 
+        if self.enabled
+            && self.signals[0].is_active() != self.signals[1].is_active()
+            && self.total_inputs % (1000 / 20) == 0
+        {
+            if self.signals[0].is_active() {
+                self.active_follower().scroll_y(1);
+            } else {
+                self.active_follower().scroll_y(-1);
+            }
+        }
+
         self.update_frontend();
         self.total_inputs += 1;
         println!(
