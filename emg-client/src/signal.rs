@@ -204,17 +204,9 @@ impl Signal {
                             .take(60)
                             .any(|f| f.value > f.activity_threshold)
                         {
-                            if self
-                                .history
-                                .iter()
-                                .rev()
-                                .take(120)
-                                .all(|f| f.value < f.too_much_threshold)
-                            {
-                                self.active_state = ActiveState::Active {
-                                    last_sustained: time,
-                                };
-                            }
+                            self.active_state = ActiveState::Active {
+                                last_sustained: time,
+                            };
                         }
                     }
                 }
