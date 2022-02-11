@@ -6,6 +6,7 @@ use rodio::{OutputStream, OutputStreamHandle};
 use serde::{Deserialize, Serialize};
 use std::io::{BufReader, BufWriter, Write};
 use std::net::TcpStream;
+use std::ops::{Deref, DerefMut};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -176,16 +177,6 @@ impl<F: Follower> SupervisedFollower<F> {
     pub fn most_recent_mouse_move(&mut self) -> Instant {
         self.most_recent_mouse_move
     }
-
-    pub fn mousedown(&mut self) {
-        self.follower.mousedown()
-    }
-    pub fn mouse_up(&mut self) {
-        self.follower.mouse_up()
-    }
-    pub fn scroll_y(&mut self, length: i32) {
-        self.follower.scroll_y(length)
-    }
 }
 
 impl SupervisedFollower<LocalFollower> {
@@ -210,32 +201,30 @@ impl SupervisedFollower<RemoteFollower> {
     }
 }
 
+impl<'a> Deref for SupervisedFollowerMut<'a> {
+    type Target = dyn Follower;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            SupervisedFollowerMut::Local(f) => &f.follower,
+            SupervisedFollowerMut::Remote(f) => &f.follower,
+        }
+    }
+}
+impl<'a> DerefMut for SupervisedFollowerMut<'a> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        match self {
+            SupervisedFollowerMut::Local(f) => &mut f.follower,
+            SupervisedFollowerMut::Remote(f) => &mut f.follower,
+        }
+    }
+}
+
 impl<'a> SupervisedFollowerMut<'a> {
     pub fn most_recent_mouse_move(&mut self) -> Instant {
         match self {
             SupervisedFollowerMut::Local(f) => f.most_recent_mouse_move,
             SupervisedFollowerMut::Remote(f) => f.most_recent_mouse_move,
-        }
-    }
-
-    pub fn mousedown(&mut self) {
-        match self {
-            SupervisedFollowerMut::Local(f) => f.mousedown(),
-            SupervisedFollowerMut::Remote(f) => f.mousedown(),
-        }
-    }
-
-    pub fn mouse_up(&mut self) {
-        match self {
-            SupervisedFollowerMut::Local(f) => f.mouse_up(),
-            SupervisedFollowerMut::Remote(f) => f.mouse_up(),
-        }
-    }
-
-    pub fn scroll_y(&mut self, length: i32) {
-        match self {
-            SupervisedFollowerMut::Local(f) => f.scroll_y(length),
-            SupervisedFollowerMut::Remote(f) => f.scroll_y(length),
         }
     }
 }
