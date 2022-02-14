@@ -50,6 +50,7 @@ pub struct Supervisor {
 
     enabled: bool,
     mouse_pressed: bool,
+    inputs_since_scroll_start: usize,
 
     fft_planner: FftPlanner<f64>,
 }
@@ -186,15 +187,23 @@ impl Supervisor {
             }
         }
 
-        if self.enabled
-            && self.signals[0].is_active() != self.signals[1].is_active()
-            && self.total_inputs % (1000 / 20) == 0
-        {
-            if self.signals[0].is_active() {
-                self.active_follower().scroll_y(1);
-            } else {
-                self.active_follower().scroll_y(-1);
+        if self.enabled && self.signals[0].is_active() != self.signals[1].is_active() {
+            fn progress(inputs: usize) -> usize {
+                let s = 250;
+                (inputs * s + inputs * inputs) / (150 * s)
             }
+            if progress(self.inputs_since_scroll_start + 1)
+                > progress(self.inputs_since_scroll_start)
+            {
+                if self.signals[0].is_active() {
+                    self.active_follower().scroll_y(1);
+                } else {
+                    self.active_follower().scroll_y(-1);
+                }
+            }
+            self.inputs_since_scroll_start += 1;
+        } else {
+            self.inputs_since_scroll_start = 0;
         }
 
         self.update_frontend();
@@ -303,6 +312,7 @@ impl Supervisor {
 
             signals: [Signal::new(), Signal::new(), Signal::new(), Signal::new()],
             fft_planner: FftPlanner::new(),
+            inputs_since_scroll_start: 0,
         }
     }
     pub fn run(mut self) {
