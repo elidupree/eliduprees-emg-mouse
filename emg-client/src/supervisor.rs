@@ -189,8 +189,8 @@ impl Supervisor {
 
         if self.enabled && self.signals[0].is_active() != self.signals[1].is_active() {
             fn progress(inputs: usize) -> usize {
-                let s = 250;
-                (inputs * s + inputs * inputs) / (150 * s)
+                let s = 400;
+                (inputs * s + inputs * inputs) / (300 * s)
             }
             if progress(self.inputs_since_scroll_start + 1)
                 > progress(self.inputs_since_scroll_start)
