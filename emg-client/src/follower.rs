@@ -1,14 +1,19 @@
 use crate::remote_time_estimator::RemoteTimeEstimator;
 use crate::utils::{load_sound, LoadedSound};
+use async_bincode::{AsyncBincodeReader, AsyncBincodeWriter, AsyncDestination};
 use enigo::{Enigo, MouseButton, MouseControllable};
+use futures::sink::SinkExt;
 use rodio::source::Buffered;
 use rodio::{OutputStream, OutputStreamHandle};
 use serde::{Deserialize, Serialize};
-use std::io::{BufReader, BufWriter, Write};
-use std::net::TcpStream;
 use std::ops::{Deref, DerefMut};
-use std::sync::mpsc;
 use std::time::{Duration, Instant};
+use tokio::io::AsyncWriteExt;
+use tokio::net::tcp::OwnedWriteHalf;
+use tokio::net::TcpStream;
+use tokio::sync::mpsc::{self, Sender};
+use tokio::task;
+use tokio_stream::StreamExt;
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub enum MessageToFollower {
@@ -37,7 +42,7 @@ pub struct LocalFollower {
 }
 
 pub struct RemoteFollower {
-    stream: BufWriter<TcpStream>,
+    stream: Sender<MessageToFollower>,
     remote_time_estimator: RemoteTimeEstimator,
 }
 
@@ -92,8 +97,9 @@ impl Follower for LocalFollower {
 }
 impl Follower for RemoteFollower {
     fn handle_message(&mut self, message: MessageToFollower) {
-        let _ = bincode::serialize_into(&mut self.stream, &message);
-        let _ = self.stream.flush();
+        //bincode::serialize(&message).unwrap();
+        let _ = self.stream.try_send(message);
+        //let _ = self.stream.flush();
     }
 }
 
@@ -115,22 +121,28 @@ impl LocalFollower {
         }
     }
 
-    pub fn listen_to_remote(mut self, supervisor_address: &str, name: String) {
-        let supervisor_stream = TcpStream::connect(supervisor_address).unwrap();
-        let (sender_from_supervisor, receiver_from_supervisor) = mpsc::channel();
-        std::thread::spawn({
-            let mut supervisor_stream = BufReader::new(supervisor_stream.try_clone().unwrap());
-            move || {
-                while let Ok(message) =
-                    bincode::deserialize_from::<_, MessageToFollower>(&mut supervisor_stream)
-                {
-                    sender_from_supervisor.send(message).unwrap();
-                }
+    pub async fn listen_to_remote(mut self, supervisor_address: &str, name: String) {
+        let supervisor_stream = TcpStream::connect(supervisor_address).await.unwrap();
+        let (read_half, mut write_half) = supervisor_stream.into_split();
+        let introduction = FollowerIntroduction { name };
+        let introduction_buf = bincode::serialize(&introduction).unwrap();
+        write_half
+            .write_u32(introduction_buf.len() as u32)
+            .await
+            .unwrap();
+        write_half.write(&introduction_buf).await.unwrap();
+
+        let mut read_stream: AsyncBincodeReader<_, MessageToFollower> =
+            AsyncBincodeReader::from(read_half);
+        let mut write_stream = AsyncBincodeWriter::from(write_half).for_async();
+
+        let (sender_from_supervisor, receiver_from_supervisor) = std::sync::mpsc::channel();
+        task::spawn(async move {
+            while let Some(Ok(message)) = read_stream.next().await {
+                sender_from_supervisor.send(message).unwrap();
             }
         });
-        let mut supervisor_stream = BufWriter::new(supervisor_stream);
-        bincode::serialize_into(&mut supervisor_stream, &FollowerIntroduction { name }).unwrap();
-        supervisor_stream.flush().unwrap();
+
         let start = Instant::now();
         loop {
             while let Ok(message) = receiver_from_supervisor.try_recv() {
@@ -139,14 +151,10 @@ impl LocalFollower {
             if let Some(_update) = self.update_most_recent_mouse_move() {
                 let now = Instant::now();
                 let time_since_start = now - start;
-                bincode::serialize_into(
-                    &mut supervisor_stream,
-                    &MessageFromFollower::MouseMoved { time_since_start },
-                )
-                .unwrap();
-                supervisor_stream.flush().unwrap();
+                let message = MessageFromFollower::MouseMoved { time_since_start };
+                write_stream.send(message).await.unwrap()
             }
-            std::thread::sleep(Duration::from_millis(1));
+            tokio::time::sleep(Duration::from_millis(1)).await;
         }
     }
 
@@ -159,9 +167,18 @@ impl LocalFollower {
 }
 
 impl RemoteFollower {
-    pub fn new(stream: TcpStream) -> RemoteFollower {
+    pub fn new(
+        stream: AsyncBincodeWriter<OwnedWriteHalf, MessageToFollower, AsyncDestination>,
+    ) -> RemoteFollower {
+        let (sender, mut receiver) = mpsc::channel(2);
+        task::spawn(async move {
+            let mut stream = stream;
+            while let Some(message) = receiver.recv().await {
+                let _ = stream.send(message).await;
+            }
+        });
         RemoteFollower {
-            stream: BufWriter::new(stream),
+            stream: sender,
             remote_time_estimator: RemoteTimeEstimator::new(Duration::from_micros(500)),
         }
     }

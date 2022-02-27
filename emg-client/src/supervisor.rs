@@ -4,18 +4,22 @@ use crate::follower::{
 };
 use crate::signal::Signal;
 use crate::webserver::{FrontendState, MessageFromFrontend};
+use async_bincode::{AsyncBincodeReader, AsyncBincodeWriter};
 use crossbeam::atomic::AtomicCell;
 use emg_mouse_shared::ReportFromServer;
 use rustfft::FftPlanner;
 use statrs::statistics::Statistics;
 use std::collections::HashMap;
 use std::io::BufReader;
-use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::io::AsyncReadExt;
+use tokio::net::TcpListener;
+use tokio::task;
+use tokio_stream::StreamExt;
 
 pub struct SupervisorOptions {
     pub server_address: String,
@@ -227,7 +231,8 @@ impl Supervisor {
         let frontend_state_updater = Arc::new(AtomicCell::new(None));
         let (sender, receiver) = mpsc::channel();
 
-        let mut server_stream = BufReader::new(TcpStream::connect(&server_address).unwrap());
+        let mut server_stream =
+            BufReader::new(std::net::TcpStream::connect(&server_address).unwrap());
         std::thread::spawn({
             let sender = sender.clone();
             move || {
@@ -241,47 +246,46 @@ impl Supervisor {
             }
         });
 
-        std::thread::spawn({
+        task::spawn({
             let sender = sender.clone();
-            move || {
-                let listener = TcpListener::bind(("0.0.0.0", follower_port)).unwrap();
+            async move {
+                let listener = TcpListener::bind(("0.0.0.0", follower_port)).await.unwrap();
 
-                for stream in listener.incoming() {
-                    match stream {
-                        Ok(stream) => {
-                            std::thread::spawn({
-                                let sender = sender.clone();
-                                move || {
-                                    let mut read_stream =
-                                        BufReader::new(stream.try_clone().unwrap());
-                                    let write_stream = stream;
-                                    if let Ok(introduction) =
-                                        bincode::deserialize_from::<_, FollowerIntroduction>(
-                                            &mut read_stream,
-                                        )
-                                    {
+                loop {
+                    match listener.accept().await {
+                        Ok((stream, _addr)) => {
+                            let sender = sender.clone();
+                            task::spawn(async move {
+                                let (mut read_half, write_half) = stream.into_split();
+                                let size = read_half.read_u32().await?;
+                                let mut introduction_buf = vec![0; size as usize];
+                                read_half.read_exact(&mut introduction_buf).await?;
+                                let write_stream = AsyncBincodeWriter::from(write_half).for_async();
+                                if let Ok(introduction) =
+                                    bincode::deserialize::<FollowerIntroduction>(&introduction_buf)
+                                {
+                                    sender
+                                        .send(MessageToSupervisor::NewFollower(
+                                            introduction.name.clone(),
+                                            SupervisedFollower::new(RemoteFollower::new(
+                                                write_stream,
+                                            )),
+                                        ))
+                                        .unwrap();
+                                    let mut read_stream: AsyncBincodeReader<
+                                        _,
+                                        MessageFromFollower,
+                                    > = AsyncBincodeReader::from(read_half);
+                                    while let Ok(message) = read_stream.next().await.unwrap() {
                                         sender
-                                            .send(MessageToSupervisor::NewFollower(
+                                            .send(MessageToSupervisor::FromFollower(
                                                 introduction.name.clone(),
-                                                SupervisedFollower::new(RemoteFollower::new(
-                                                    write_stream,
-                                                )),
+                                                message,
                                             ))
                                             .unwrap();
-                                        while let Ok(message) =
-                                            bincode::deserialize_from::<_, MessageFromFollower>(
-                                                &mut read_stream,
-                                            )
-                                        {
-                                            sender
-                                                .send(MessageToSupervisor::FromFollower(
-                                                    introduction.name.clone(),
-                                                    message,
-                                                ))
-                                                .unwrap();
-                                        }
                                     }
                                 }
+                                Result::<(), tokio::io::Error>::Ok(())
                             });
                         }
                         Err(_e) => { /* connection failed */ }

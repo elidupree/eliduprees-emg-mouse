@@ -78,10 +78,12 @@ async fn main() {
             .await;
         }
         ("follower", Some(matches)) => {
-            LocalFollower::new().listen_to_remote(
-                matches.value_of("supervisor-address").unwrap(),
-                matches.value_of("name").unwrap().to_string(),
-            );
+            LocalFollower::new()
+                .listen_to_remote(
+                    matches.value_of("supervisor-address").unwrap(),
+                    matches.value_of("name").unwrap().to_string(),
+                )
+                .await;
         }
         _ => {
             unreachable!()
