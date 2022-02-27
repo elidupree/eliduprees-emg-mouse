@@ -1,21 +1,21 @@
-#![feature(proc_macro_hygiene, decl_macro, type_alias_impl_trait)]
-
-#[macro_use]
-extern crate rocket;
+#![feature(type_alias_impl_trait)]
 
 mod follower;
 mod remote_time_estimator;
-mod rocket_glue;
 mod signal;
 mod supervisor;
 mod utils;
 mod webserver;
+mod webserver_glue;
 
 use crate::follower::LocalFollower;
 use crate::supervisor::{Supervisor, SupervisorOptions};
 use clap::{App, AppSettings, Arg, SubCommand};
 
-fn main() {
+#[actix_web::main]
+async fn main() {
+    env_logger::init();
+
     let matches = App::new("EliDupree's EMG Mouse Client")
         .version("0.1")
         .author("Eli Dupree <vcs@elidupree.com>")
@@ -62,7 +62,7 @@ fn main() {
 
     match matches.subcommand() {
         ("supervisor", Some(matches)) => {
-            Supervisor::new(SupervisorOptions {
+            Supervisor::run(SupervisorOptions {
                 server_address: matches.value_of("server-address").unwrap().to_string(),
                 gui_port: matches
                     .value_of("gui-port")
@@ -75,7 +75,7 @@ fn main() {
                     .parse::<u16>()
                     .unwrap(),
             })
-            .run();
+            .await;
         }
         ("follower", Some(matches)) => {
             LocalFollower::new().listen_to_remote(

@@ -151,12 +151,12 @@ impl Signal {
                 } else if let Some(back) = self.history.back() {
                     (back.activity_threshold, back.too_much_threshold)
                 } else {
-                    (0.0, 0.0)
+                    (1.0, 1.0)
                 }
             } else if let Some(back) = self.history.back() {
                 (back.activity_threshold, back.too_much_threshold)
             } else {
-                (0.0, 0.0)
+                (1.0, 1.0)
             };
 
             // let recent_values = self

@@ -208,38 +208,24 @@ impl Supervisor {
 
         self.update_frontend();
         self.total_inputs += 1;
-        println!(
-            "{}: {:.2}, {}",
-            self.total_inputs,
-            self.total_inputs as f64 / report.time_since_start.as_secs_f64(),
-            report.time_since_start.as_micros(),
-        );
+        // println!(
+        //     "{}: {:.2}, {}",
+        //     self.total_inputs,
+        //     self.total_inputs as f64 / report.time_since_start.as_secs_f64(),
+        //     report.time_since_start.as_micros(),
+        // );
     }
 
-    pub fn new(
+    pub async fn run(
         SupervisorOptions {
             server_address,
             gui_port,
             follower_port,
         }: SupervisorOptions,
-    ) -> Supervisor {
+    ) {
         let start_time = Instant::now();
         let frontend_state_updater = Arc::new(AtomicCell::new(None));
         let (sender, receiver) = mpsc::channel();
-        std::thread::spawn({
-            let state_updater = frontend_state_updater.clone();
-            let sender = sender.clone();
-            move || {
-                crate::rocket_glue::launch(
-                    state_updater,
-                    sender,
-                    PathBuf::from("web_frontend"),
-                    gui_port,
-                );
-            }
-        });
-
-        let local_follower = SupervisedFollower::new(LocalFollower::new());
 
         let mut server_stream = BufReader::new(TcpStream::connect(&server_address).unwrap());
         std::thread::spawn({
@@ -255,69 +241,88 @@ impl Supervisor {
             }
         });
 
-        std::thread::spawn(move || {
-            let listener = TcpListener::bind(("0.0.0.0", follower_port)).unwrap();
+        std::thread::spawn({
+            let sender = sender.clone();
+            move || {
+                let listener = TcpListener::bind(("0.0.0.0", follower_port)).unwrap();
 
-            for stream in listener.incoming() {
-                match stream {
-                    Ok(stream) => {
-                        std::thread::spawn({
-                            let sender = sender.clone();
-                            move || {
-                                let mut read_stream = BufReader::new(stream.try_clone().unwrap());
-                                let write_stream = stream;
-                                if let Ok(introduction) =
-                                    bincode::deserialize_from::<_, FollowerIntroduction>(
-                                        &mut read_stream,
-                                    )
-                                {
-                                    sender
-                                        .send(MessageToSupervisor::NewFollower(
-                                            introduction.name.clone(),
-                                            SupervisedFollower::new(RemoteFollower::new(
-                                                write_stream,
-                                            )),
-                                        ))
-                                        .unwrap();
-                                    while let Ok(message) =
-                                        bincode::deserialize_from::<_, MessageFromFollower>(
+                for stream in listener.incoming() {
+                    match stream {
+                        Ok(stream) => {
+                            std::thread::spawn({
+                                let sender = sender.clone();
+                                move || {
+                                    let mut read_stream =
+                                        BufReader::new(stream.try_clone().unwrap());
+                                    let write_stream = stream;
+                                    if let Ok(introduction) =
+                                        bincode::deserialize_from::<_, FollowerIntroduction>(
                                             &mut read_stream,
                                         )
                                     {
                                         sender
-                                            .send(MessageToSupervisor::FromFollower(
+                                            .send(MessageToSupervisor::NewFollower(
                                                 introduction.name.clone(),
-                                                message,
+                                                SupervisedFollower::new(RemoteFollower::new(
+                                                    write_stream,
+                                                )),
                                             ))
                                             .unwrap();
+                                        while let Ok(message) =
+                                            bincode::deserialize_from::<_, MessageFromFollower>(
+                                                &mut read_stream,
+                                            )
+                                        {
+                                            sender
+                                                .send(MessageToSupervisor::FromFollower(
+                                                    introduction.name.clone(),
+                                                    message,
+                                                ))
+                                                .unwrap();
+                                        }
                                     }
                                 }
-                            }
-                        });
+                            });
+                        }
+                        Err(_e) => { /* connection failed */ }
                     }
-                    Err(_e) => { /* connection failed */ }
                 }
             }
         });
-        Supervisor {
-            start_time,
-            total_inputs: 0,
-            local_follower,
-            remote_followers: HashMap::new(),
-            active_follower_id: FollowerId::Local,
-            frontend_state_updater,
-            receiver,
-            enabled: false,
-            mouse_pressed: false,
 
-            signals: [Signal::new(), Signal::new(), Signal::new(), Signal::new()],
-            fft_planner: FftPlanner::new(),
-            inputs_since_scroll_start: 0,
-        }
-    }
-    pub fn run(mut self) {
-        while let Ok(message) = self.receiver.recv() {
-            self.handle_message(message);
-        }
+        let state_updater = frontend_state_updater.clone();
+
+        std::thread::spawn({
+            move || {
+                let local_follower = SupervisedFollower::new(LocalFollower::new());
+                let mut this = Supervisor {
+                    start_time,
+                    total_inputs: 0,
+                    local_follower,
+                    remote_followers: HashMap::new(),
+                    active_follower_id: FollowerId::Local,
+                    frontend_state_updater,
+                    receiver,
+                    enabled: false,
+                    mouse_pressed: false,
+
+                    signals: [Signal::new(), Signal::new(), Signal::new(), Signal::new()],
+                    fft_planner: FftPlanner::new(),
+                    inputs_since_scroll_start: 0,
+                };
+
+                while let Ok(message) = this.receiver.recv() {
+                    this.handle_message(message);
+                }
+            }
+        });
+
+        crate::webserver_glue::launch(
+            state_updater,
+            sender,
+            PathBuf::from("web_frontend"),
+            gui_port,
+        )
+        .await
     }
 }
