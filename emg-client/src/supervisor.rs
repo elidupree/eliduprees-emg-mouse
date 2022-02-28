@@ -276,7 +276,7 @@ impl Supervisor {
                                         _,
                                         MessageFromFollower,
                                     > = AsyncBincodeReader::from(read_half);
-                                    while let Ok(message) = read_stream.next().await.unwrap() {
+                                    while let Some(Ok(message)) = read_stream.next().await {
                                         sender
                                             .send(MessageToSupervisor::FromFollower(
                                                 introduction.name.clone(),
