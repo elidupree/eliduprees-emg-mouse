@@ -13,7 +13,7 @@ use crate::supervisor::{Supervisor, SupervisorOptions};
 use clap::{App, AppSettings, Arg, SubCommand};
 
 #[actix_web::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     env_logger::init();
 
     let matches = App::new("EliDupree's EMG Mouse Client")
@@ -52,6 +52,12 @@ async fn main() {
                         .takes_value(true),
                 )
                 .arg(
+                    Arg::with_name("supervisor-cert-path")
+                        .long("supervisor-cert-path")
+                        .required(true)
+                        .takes_value(true),
+                )
+                .arg(
                     Arg::with_name("name")
                         .long("name")
                         .required(true)
@@ -75,15 +81,16 @@ async fn main() {
                     .parse::<u16>()
                     .unwrap(),
             })
-            .await;
+            .await
         }
         ("follower", Some(matches)) => {
             LocalFollower::new()
                 .listen_to_remote(
                     matches.value_of("supervisor-address").unwrap(),
+                    matches.value_of("supervisor-cert-path").unwrap(),
                     matches.value_of("name").unwrap().to_string(),
                 )
-                .await;
+                .await
         }
         _ => {
             unreachable!()

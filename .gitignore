@@ -1,3 +1,4 @@
 modify_noticer
 .idea
 .env
+/secrets

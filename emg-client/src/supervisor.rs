@@ -3,21 +3,21 @@ use crate::follower::{
     SupervisedFollowerMut,
 };
 use crate::signal::Signal;
+use crate::utils::{DatagramsExt, IncomingUniStreamsExt};
 use crate::webserver::{FrontendState, MessageFromFrontend};
-use async_bincode::{AsyncBincodeReader, AsyncBincodeWriter};
+use anyhow::{bail, Context};
 use crossbeam::atomic::AtomicCell;
 use emg_mouse_shared::ReportFromServer;
+use log::info;
 use rustfft::FftPlanner;
 use statrs::statistics::Statistics;
 use std::collections::HashMap;
 use std::io::BufReader;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::io::AsyncReadExt;
-use tokio::net::TcpListener;
 use tokio::task;
 use tokio_stream::StreamExt;
 
@@ -226,7 +226,7 @@ impl Supervisor {
             gui_port,
             follower_port,
         }: SupervisorOptions,
-    ) {
+    ) -> anyhow::Result<()> {
         let start_time = Instant::now();
         let frontend_state_updater = Arc::new(AtomicCell::new(None));
         let (sender, receiver) = mpsc::channel();
@@ -249,34 +249,65 @@ impl Supervisor {
         task::spawn({
             let sender = sender.clone();
             async move {
-                let listener = TcpListener::bind(("0.0.0.0", follower_port)).await.unwrap();
+                let path = Path::new("secrets");
+                let cert_path = path.join("local_cert.der");
+                let key_path = path.join("local_private_key.der");
+                let (cert, key) = match std::fs::read(&cert_path)
+                    .and_then(|x| Ok((x, std::fs::read(&key_path)?)))
+                {
+                    Ok(x) => x,
+                    Err(ref e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        info!("generating self-signed certificate");
+                        let cert =
+                            rcgen::generate_simple_self_signed(vec!["EMG_supervisor".into()])
+                                .unwrap();
+                        let key = cert.serialize_private_key_der();
+                        let cert = cert.serialize_der().unwrap();
+                        std::fs::create_dir_all(&path)
+                            .context("failed to create certificate directory")?;
+                        std::fs::write(&cert_path, &cert).context("failed to write certificate")?;
+                        std::fs::write(&key_path, &key).context("failed to write private key")?;
+                        (cert, key)
+                    }
+                    Err(e) => {
+                        bail!("failed to read certificate: {}", e);
+                    }
+                };
 
-                loop {
-                    match listener.accept().await {
-                        Ok((stream, _addr)) => {
-                            let sender = sender.clone();
-                            task::spawn(async move {
-                                let (mut read_half, write_half) = stream.into_split();
-                                let size = read_half.read_u32().await?;
-                                let mut introduction_buf = vec![0; size as usize];
-                                read_half.read_exact(&mut introduction_buf).await?;
-                                let write_stream = AsyncBincodeWriter::from(write_half).for_async();
-                                if let Ok(introduction) =
-                                    bincode::deserialize::<FollowerIntroduction>(&introduction_buf)
+                let key = rustls::PrivateKey(key);
+                let cert = rustls::Certificate(cert);
+                let server_crypto = rustls::ServerConfig::builder()
+                    .with_safe_defaults()
+                    .with_no_client_auth()
+                    .with_single_cert(vec![cert], key)?;
+                let server_config = quinn::ServerConfig::with_crypto(Arc::new(server_crypto));
+
+                let (_endpoint, mut incoming) =
+                    quinn::Endpoint::server(server_config, ([0, 0, 0, 0], follower_port).into())?;
+
+                while let Some(connection) = incoming.next().await {
+                    let sender = sender.clone();
+                    task::spawn(async move {
+                        match connection.await {
+                            Ok(quinn::NewConnection {
+                                connection,
+                                mut uni_streams,
+                                mut datagrams,
+                                ..
+                            }) => {
+                                if let Ok(Some(introduction)) = uni_streams
+                                    .next_bincode_oneshot::<FollowerIntroduction>()
+                                    .await
                                 {
                                     sender
                                         .send(MessageToSupervisor::NewFollower(
                                             introduction.name.clone(),
                                             SupervisedFollower::new(RemoteFollower::new(
-                                                write_stream,
+                                                connection,
                                             )),
                                         ))
                                         .unwrap();
-                                    let mut read_stream: AsyncBincodeReader<
-                                        _,
-                                        MessageFromFollower,
-                                    > = AsyncBincodeReader::from(read_half);
-                                    while let Some(Ok(message)) = read_stream.next().await {
+                                    while let Ok(Some(message)) = datagrams.next_bincode().await {
                                         sender
                                             .send(MessageToSupervisor::FromFollower(
                                                 introduction.name.clone(),
@@ -285,12 +316,13 @@ impl Supervisor {
                                             .unwrap();
                                     }
                                 }
-                                Result::<(), tokio::io::Error>::Ok(())
-                            });
+                            }
+                            Err(_e) => { /* connection failed */ }
                         }
-                        Err(_e) => { /* connection failed */ }
-                    }
+                        Result::<(), anyhow::Error>::Ok(())
+                    });
                 }
+                Result::<(), anyhow::Error>::Ok(())
             }
         });
 

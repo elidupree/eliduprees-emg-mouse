@@ -43,7 +43,7 @@ pub async fn launch(
     sender: Sender<MessageToSupervisor>,
     static_files: PathBuf,
     port: u16,
-) {
+) -> anyhow::Result<()> {
     let state = web::Data::new(WebserverState {
         state_updater,
         sender: Mutex::new(sender),
@@ -60,6 +60,6 @@ pub async fn launch(
     .bind(("localhost", port))
     .unwrap()
     .run()
-    .await
-    .unwrap();
+    .await?;
+    Ok(())
 }

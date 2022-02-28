@@ -1,19 +1,14 @@
 use crate::remote_time_estimator::RemoteTimeEstimator;
-use crate::utils::{load_sound, LoadedSound};
-use async_bincode::{AsyncBincodeReader, AsyncBincodeWriter, AsyncDestination};
+use crate::utils::{load_sound, ConnectionExt, DatagramsExt, LoadedSound};
 use enigo::{Enigo, MouseButton, MouseControllable};
-use futures::sink::SinkExt;
 use rodio::source::Buffered;
 use rodio::{OutputStream, OutputStreamHandle};
 use serde::{Deserialize, Serialize};
 use std::ops::{Deref, DerefMut};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::io::AsyncWriteExt;
-use tokio::net::tcp::OwnedWriteHalf;
-use tokio::net::TcpStream;
 use tokio::sync::mpsc::{self, Sender};
 use tokio::task;
-use tokio_stream::StreamExt;
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub enum MessageToFollower {
@@ -121,24 +116,41 @@ impl LocalFollower {
         }
     }
 
-    pub async fn listen_to_remote(mut self, supervisor_address: &str, name: String) {
-        let supervisor_stream = TcpStream::connect(supervisor_address).await.unwrap();
-        let (read_half, mut write_half) = supervisor_stream.into_split();
-        let introduction = FollowerIntroduction { name };
-        let introduction_buf = bincode::serialize(&introduction).unwrap();
-        write_half
-            .write_u32(introduction_buf.len() as u32)
-            .await
-            .unwrap();
-        write_half.write(&introduction_buf).await.unwrap();
+    pub async fn listen_to_remote(
+        mut self,
+        supervisor_address: &str,
+        supervisor_cert_path: &str,
+        name: String,
+    ) -> anyhow::Result<()> {
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(&rustls::Certificate(std::fs::read(&supervisor_cert_path)?))?;
+        let client_crypto = rustls::ClientConfig::builder()
+            .with_safe_defaults()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
 
-        let mut read_stream: AsyncBincodeReader<_, MessageToFollower> =
-            AsyncBincodeReader::from(read_half);
-        let mut write_stream = AsyncBincodeWriter::from(write_half).for_async();
+        let mut endpoint = quinn::Endpoint::client("[::]:0".parse().unwrap())?;
+        let mut transport_config = quinn::TransportConfig::default();
+        transport_config.keep_alive_interval(Some(Duration::from_millis(1_000)));
+        let mut config = quinn::ClientConfig::new(Arc::new(client_crypto));
+        config.transport = Arc::new(transport_config);
+        endpoint.set_default_client_config(config);
+
+        let quinn::NewConnection {
+            connection,
+            mut datagrams,
+            ..
+        } = endpoint
+            .connect(supervisor_address.parse().unwrap(), "EMG_supervisor")?
+            .await?;
+
+        connection
+            .send_bincode_oneshot_stream(&FollowerIntroduction { name })
+            .await?;
 
         let (sender_from_supervisor, receiver_from_supervisor) = std::sync::mpsc::channel();
         task::spawn(async move {
-            while let Some(Ok(message)) = read_stream.next().await {
+            while let Ok(Some(message)) = datagrams.next_bincode().await {
                 sender_from_supervisor.send(message).unwrap();
             }
         });
@@ -152,7 +164,7 @@ impl LocalFollower {
                 let now = Instant::now();
                 let time_since_start = now - start;
                 let message = MessageFromFollower::MouseMoved { time_since_start };
-                write_stream.send(message).await.unwrap()
+                connection.send_bincode_datagram(&message)?;
             }
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
@@ -167,14 +179,11 @@ impl LocalFollower {
 }
 
 impl RemoteFollower {
-    pub fn new(
-        stream: AsyncBincodeWriter<OwnedWriteHalf, MessageToFollower, AsyncDestination>,
-    ) -> RemoteFollower {
+    pub fn new(connection: quinn::Connection) -> RemoteFollower {
         let (sender, mut receiver) = mpsc::channel(2);
         task::spawn(async move {
-            let mut stream = stream;
             while let Some(message) = receiver.recv().await {
-                let _ = stream.send(message).await;
+                let _ = connection.send_bincode_datagram::<MessageToFollower>(&message);
             }
         });
         RemoteFollower {
