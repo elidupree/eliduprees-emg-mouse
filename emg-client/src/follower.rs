@@ -2,7 +2,7 @@ use crate::remote_time_estimator::RemoteTimeEstimator;
 use crate::utils::{load_sound, ConnectionExt, DatagramsExt, LoadedSound};
 use enigo::{Enigo, MouseButton, MouseControllable};
 use rodio::source::Buffered;
-use rodio::{OutputStream, OutputStreamHandle};
+use rodio::OutputStreamHandle;
 use serde::{Deserialize, Serialize};
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
@@ -29,13 +29,13 @@ pub struct FollowerIntroduction {
 
 pub struct LocalFollower {
     enigo: Enigo,
-    _audio_output_stream: OutputStream,
     audio_output_stream_handle: OutputStreamHandle,
     click_sound: Buffered<LoadedSound>,
     unclick_sound: Buffered<LoadedSound>,
     most_recent_mouse_location: (i32, i32),
 }
 
+#[derive(Debug)]
 pub struct RemoteFollower {
     stream: Sender<MessageToFollower>,
     remote_time_estimator: RemoteTimeEstimator,
@@ -61,6 +61,7 @@ pub trait Follower {
     }
 }
 
+#[derive(Debug)]
 pub struct SupervisedFollower<F> {
     pub follower: F,
     pub most_recent_mouse_move: Instant,
@@ -99,16 +100,14 @@ impl Follower for RemoteFollower {
 }
 
 impl LocalFollower {
-    pub fn new() -> LocalFollower {
-        let (_audio_output_stream, audio_output_stream_handle) =
-            OutputStream::try_default().unwrap();
+    /// you have to store the OutputStream somewhere
+    pub fn new(audio_output_stream_handle: OutputStreamHandle) -> LocalFollower {
         let enigo = Enigo::new();
 
         let click_sound = load_sound("../media/click.wav");
         let unclick_sound = load_sound("../media/unclick.wav");
         LocalFollower {
             enigo,
-            _audio_output_stream,
             audio_output_stream_handle,
             click_sound,
             unclick_sound,

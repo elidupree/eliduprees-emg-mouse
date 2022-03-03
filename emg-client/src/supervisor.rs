@@ -2,22 +2,28 @@ use crate::follower::{
     FollowerIntroduction, LocalFollower, MessageFromFollower, RemoteFollower, SupervisedFollower,
     SupervisedFollowerMut,
 };
+use crate::remote_time_estimator::RemoteTimeEstimator;
 use crate::signal::Signal;
+use crate::supervisor::MessageToSupervisor::PokeServers;
 use crate::utils::{DatagramsExt, IncomingUniStreamsExt};
 use crate::webserver::{FrontendState, MessageFromFrontend};
 use anyhow::{bail, Context};
 use crossbeam::atomic::AtomicCell;
-use emg_mouse_shared::ReportFromServer;
+use emg_mouse_shared::{
+    MessageToServer, OwnedSamplesArray, ReportFromServer, Samples, ServerRunId,
+};
 use log::info;
+use rodio::OutputStream;
 use rustfft::FftPlanner;
 use statrs::statistics::Statistics;
 use std::collections::HashMap;
-use std::io::BufReader;
+use std::convert::TryInto;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
-use std::sync::mpsc::Receiver;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::net::UdpSocket;
+use tokio::sync::mpsc;
 use tokio::task;
 use tokio_stream::StreamExt;
 
@@ -31,11 +37,25 @@ enum FollowerId {
     Local,
     Remote(String),
 }
+#[derive(Debug)]
 pub enum MessageToSupervisor {
     FromFrontend(MessageFromFrontend),
-    FromServer(ReportFromServer),
+    FromServer {
+        server_index: usize,
+        report: ReportFromServer<OwnedSamplesArray>,
+    },
     NewFollower(String, SupervisedFollower<RemoteFollower>),
     FromFollower(String, MessageFromFollower),
+    PokeServers,
+}
+
+pub struct SupervisedServer {
+    address: SocketAddr,
+    latest_run_id: Option<ServerRunId>,
+    old_run_ids: Vec<ServerRunId>,
+    latest_received_sample_index: u64,
+    remote_time_estimator: RemoteTimeEstimator,
+    signals: [Signal; 4],
 }
 
 pub struct Supervisor {
@@ -46,11 +66,12 @@ pub struct Supervisor {
     remote_followers: HashMap<String, SupervisedFollower<RemoteFollower>>,
     active_follower_id: FollowerId,
 
+    servers: Vec<SupervisedServer>,
+    server_socket: Arc<UdpSocket>,
+
     frontend_state_updater: Arc<AtomicCell<Option<FrontendState>>>,
 
-    receiver: Receiver<MessageToSupervisor>,
-
-    signals: [Signal; 4],
+    receiver: mpsc::Receiver<MessageToSupervisor>,
 
     enabled: bool,
     mouse_pressed: bool,
@@ -89,7 +110,10 @@ impl Supervisor {
     }
     fn update_frontend(&mut self) {
         let start_time = self.start_time;
-        let latest_time = self.signals[0].history.back().map_or(0.0, |f| f.time);
+        let latest_time = self.servers[0].signals[0]
+            .history
+            .back()
+            .map_or(0.0, |f| f.time);
         self.frontend_state_updater.store(Some(FrontendState {
             enabled: self.enabled,
             followers: std::iter::once((
@@ -103,7 +127,7 @@ impl Supervisor {
                 )
             }))
             .collect(),
-            histories: self
+            histories: self.servers[0]
                 .signals
                 .iter()
                 .map(|s| {
@@ -114,7 +138,7 @@ impl Supervisor {
                         .collect()
                 })
                 .collect(),
-            frequencies_histories: self
+            frequencies_histories: self.servers[0]
                 .signals
                 .iter()
                 .map(|s| s.frequencies_history.clone())
@@ -126,12 +150,18 @@ impl Supervisor {
             MessageToSupervisor::FromFrontend(message) => {
                 self.handle_message_from_frontend(message)
             }
-            MessageToSupervisor::FromServer(report) => self.handle_report(report),
+            MessageToSupervisor::FromServer {
+                server_index,
+                report,
+            } => self.handle_report(server_index, report),
             MessageToSupervisor::NewFollower(name, follower) => {
                 self.remote_followers.insert(name, follower);
             }
             MessageToSupervisor::FromFollower(name, message) => {
                 self.handle_message_from_follower(name, message)
+            }
+            PokeServers => {
+                self.poke_servers();
             }
         }
     }
@@ -157,23 +187,79 @@ impl Supervisor {
             }
         }
     }
-    fn handle_report(&mut self, report: ReportFromServer) {
+    fn poke_server(&self, server_index: usize) {
+        let server = &self.servers[server_index];
+        let server_socket = self.server_socket.clone();
+        let address = server.address;
+        let buf = bincode::serialize(&MessageToServer {
+            server_run_id: server.latest_run_id.unwrap_or(0),
+            latest_received_sample_index: server.latest_received_sample_index,
+        })
+        .unwrap();
+        task::spawn(async move {
+            let _ = server_socket.send_to(&buf, address).await;
+        });
+    }
+    fn poke_servers(&self) {
+        for (i, _) in self.servers.iter().enumerate() {
+            self.poke_server(i);
+        }
+    }
+    fn handle_report(&mut self, server_index: usize, report: ReportFromServer<OwnedSamplesArray>) {
+        let server = &mut self.servers[server_index];
+        if server.old_run_ids.contains(&report.server_run_id) {
+            return;
+        }
+        if server.latest_run_id != Some(report.server_run_id) {
+            if let Some(current) = server.latest_run_id {
+                server.old_run_ids.push(current);
+            }
+            server.latest_run_id = Some(report.server_run_id);
+            server.remote_time_estimator = RemoteTimeEstimator::new(Duration::from_micros(50));
+            server.latest_received_sample_index = 0;
+            server.signals = [Signal::new(), Signal::new(), Signal::new(), Signal::new()];
+        }
+
+        let num_new_samples = report
+            .latest_sample_index
+            .saturating_sub(server.latest_received_sample_index);
+
+        if num_new_samples > 0 {
+            server.latest_received_sample_index = report.latest_sample_index;
+
+            self.poke_server(server_index);
+
+            let new_samples = &report.samples[report
+                .samples
+                .len()
+                .saturating_sub(num_new_samples.try_into().unwrap())..];
+            for samples in new_samples {
+                self.handle_samples(server_index, samples);
+            }
+            self.update_frontend();
+        }
+    }
+    fn handle_samples(&mut self, server_index: usize, samples: &Samples) {
         self.local_follower.update_most_recent_mouse_move();
         self.update_active_follower();
 
-        let _average = report.inputs.iter().map(|&i| i as f64).mean();
+        let _average = samples.inputs.iter().map(|&i| i as f64).mean();
 
-        let mouse_active_before = self.signals[2].is_active();
-        for (signal, &input) in self.signals.iter_mut().zip(&report.inputs) {
+        let mouse_active_before = self.servers[server_index].signals[2].is_active();
+        for (signal, &input) in self.servers[server_index]
+            .signals
+            .iter_mut()
+            .zip(&samples.inputs)
+        {
             signal.receive_raw(
                 input as f64, /*- average*/
-                report.time_since_start,
+                samples.time_since_start,
                 &mut self.fft_planner,
             )
         }
 
-        if self.signals[2].is_active() != mouse_active_before {
-            if self.signals[2].is_active() {
+        if self.servers[server_index].signals[2].is_active() != mouse_active_before {
+            if self.servers[server_index].signals[2].is_active() {
                 let move_time = self.active_follower().most_recent_mouse_move();
                 let recently_moved = (Instant::now() - move_time) < Duration::from_millis(50);
                 let anywhere_near_recently_moved =
@@ -191,7 +277,10 @@ impl Supervisor {
             }
         }
 
-        if self.enabled && self.signals[0].is_active() != self.signals[1].is_active() {
+        if self.enabled
+            && self.servers[server_index].signals[0].is_active()
+                != self.servers[server_index].signals[1].is_active()
+        {
             fn progress(inputs: usize) -> usize {
                 let s = 400;
                 (inputs * s + inputs * inputs) / (300 * s)
@@ -199,7 +288,7 @@ impl Supervisor {
             if progress(self.inputs_since_scroll_start + 1)
                 > progress(self.inputs_since_scroll_start)
             {
-                if self.signals[0].is_active() {
+                if self.servers[server_index].signals[0].is_active() {
                     self.active_follower().scroll_y(1);
                 } else {
                     self.active_follower().scroll_y(-1);
@@ -210,14 +299,13 @@ impl Supervisor {
             self.inputs_since_scroll_start = 0;
         }
 
-        self.update_frontend();
         self.total_inputs += 1;
-        // println!(
-        //     "{}: {:.2}, {}",
-        //     self.total_inputs,
-        //     self.total_inputs as f64 / report.time_since_start.as_secs_f64(),
-        //     report.time_since_start.as_micros(),
-        // );
+        println!(
+            "{}: {:.2}, {}",
+            self.total_inputs,
+            self.total_inputs as f64 / samples.time_since_start.as_secs_f64(),
+            samples.time_since_start.as_micros(),
+        );
     }
 
     pub async fn run(
@@ -229,19 +317,28 @@ impl Supervisor {
     ) -> anyhow::Result<()> {
         let start_time = Instant::now();
         let frontend_state_updater = Arc::new(AtomicCell::new(None));
-        let (sender, receiver) = mpsc::channel();
+        let (sender, receiver) = mpsc::channel(2);
 
-        let mut server_stream =
-            BufReader::new(std::net::TcpStream::connect(&server_address).unwrap());
-        std::thread::spawn({
+        let server_socket = Arc::new(UdpSocket::bind("0.0.0.0:8080").await?);
+        let server_addresses = [server_address.parse::<SocketAddr>().unwrap()];
+        task::spawn({
             let sender = sender.clone();
-            move || {
-                while let Ok(message) =
-                    bincode::deserialize_from::<_, ReportFromServer>(&mut server_stream)
-                {
-                    sender
-                        .send(MessageToSupervisor::FromServer(message))
-                        .unwrap();
+            let server_socket = server_socket.clone();
+            async move {
+                let mut buf = vec![0u8; 65536];
+                while let Ok((size, address)) = server_socket.recv_from(&mut buf).await {
+                    if let Some(server_index) = server_addresses.iter().position(|&a| a == address)
+                    {
+                        if let Ok(report) = bincode::deserialize(&buf[..size]) {
+                            sender
+                                .send(MessageToSupervisor::FromServer {
+                                    server_index,
+                                    report,
+                                })
+                                .await
+                                .unwrap();
+                        }
+                    }
                 }
             }
         });
@@ -306,6 +403,7 @@ impl Supervisor {
                                                 connection,
                                             )),
                                         ))
+                                        .await
                                         .unwrap();
                                     while let Ok(Some(message)) = datagrams.next_bincode().await {
                                         sender
@@ -313,6 +411,7 @@ impl Supervisor {
                                                 introduction.name.clone(),
                                                 message,
                                             ))
+                                            .await
                                             .unwrap();
                                     }
                                 }
@@ -328,28 +427,55 @@ impl Supervisor {
 
         let state_updater = frontend_state_updater.clone();
 
-        std::thread::spawn({
-            move || {
-                let local_follower = SupervisedFollower::new(LocalFollower::new());
-                let mut this = Supervisor {
-                    start_time,
-                    total_inputs: 0,
-                    local_follower,
-                    remote_followers: HashMap::new(),
-                    active_follower_id: FollowerId::Local,
-                    frontend_state_updater,
-                    receiver,
-                    enabled: false,
-                    mouse_pressed: false,
-
-                    signals: [Signal::new(), Signal::new(), Signal::new(), Signal::new()],
-                    fft_planner: FftPlanner::new(),
-                    inputs_since_scroll_start: 0,
-                };
-
-                while let Ok(message) = this.receiver.recv() {
-                    this.handle_message(message);
+        task::spawn({
+            let sender = sender.clone();
+            async move {
+                let mut interval = tokio::time::interval(Duration::from_millis(100));
+                loop {
+                    let _ = sender.try_send(MessageToSupervisor::PokeServers);
+                    interval.tick().await;
                 }
+            }
+        });
+
+        task::spawn(async move {
+            let audio_output_stream_handle = {
+                let (_audio_output_stream, audio_output_stream_handle) =
+                    OutputStream::try_default().unwrap();
+                std::mem::forget(_audio_output_stream);
+                audio_output_stream_handle
+            };
+            let local_follower =
+                SupervisedFollower::new(LocalFollower::new(audio_output_stream_handle));
+            let mut this = Supervisor {
+                start_time,
+                total_inputs: 0,
+                local_follower,
+                remote_followers: HashMap::new(),
+                active_follower_id: FollowerId::Local,
+                servers: server_addresses
+                    .iter()
+                    .map(|&address| SupervisedServer {
+                        address,
+                        latest_run_id: None,
+                        old_run_ids: vec![],
+                        latest_received_sample_index: 0,
+                        remote_time_estimator: RemoteTimeEstimator::default(),
+                        signals: Default::default(),
+                    })
+                    .collect(),
+                server_socket,
+                frontend_state_updater,
+                receiver,
+                enabled: false,
+                mouse_pressed: false,
+
+                fft_planner: FftPlanner::new(),
+                inputs_since_scroll_start: 0,
+            };
+
+            while let Some(message) = this.receiver.recv().await {
+                this.handle_message(message);
             }
         });
 

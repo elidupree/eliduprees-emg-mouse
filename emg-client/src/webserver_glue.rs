@@ -4,8 +4,8 @@ use actix_files::NamedFile;
 use actix_web::{get, post, web, App, HttpServer, Responder};
 use crossbeam::atomic::AtomicCell;
 use std::path::PathBuf;
-use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
+use tokio::sync::mpsc::Sender;
 
 struct WebserverState {
     sender: Mutex<Sender<MessageToSupervisor>>,
@@ -29,6 +29,7 @@ async fn input(
         .lock()
         .unwrap()
         .send(MessageToSupervisor::FromFrontend(input))
+        .await
         .unwrap();
     ""
 }

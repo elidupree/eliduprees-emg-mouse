@@ -20,17 +20,18 @@ opt-level = "z"
 [dependencies]
 anyhow = { version = "1", features = ["backtrace"] }
 log = "0.4"
-esp-idf-sys = { version = "0.29", features = ["binstart"] }
-esp-idf-svc = "0.36"
-esp-idf-hal = "0.32"
-embedded-svc = "0.16"
+esp-idf-sys = { version = "0.30.6", features = ["binstart"] }
+esp-idf-svc = "0.37.2"
+esp-idf-hal = "0.33.1"
+embedded-svc = "0.17.2"
 embedded-hal = "0.2"
 serde = { version = "1.0", features = ["derive"] }
 bincode = "1.3.3"
+rand = "0.8.5"
 emg-mouse-shared = { path = "../emg-mouse-shared" }
 
 [build-dependencies]
-embuild = "0.27"
+embuild = "0.28"
 anyhow = "1"
 
 # Future; might be possible once https://github.com/rust-lang/cargo/issues/9096 hits Cargo nightly:

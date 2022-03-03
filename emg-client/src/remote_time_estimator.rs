@@ -20,10 +20,17 @@ the data structure uses only O(1) space.
 
 */
 
+#[derive(Debug)]
 pub struct RemoteTimeEstimator {
     tolerance: Duration,
     frontier: Vec<(f64, Instant)>,
     before_middle_index: usize,
+}
+
+impl Default for RemoteTimeEstimator {
+    fn default() -> Self {
+        RemoteTimeEstimator::new(Duration::from_micros(50))
+    }
 }
 
 impl RemoteTimeEstimator {
