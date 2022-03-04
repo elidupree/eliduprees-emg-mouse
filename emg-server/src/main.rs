@@ -68,16 +68,16 @@ fn main() -> Result<()> {
         sender,
     );
 
-    // std::thread::Builder::new()
-    //     .stack_size(10000)
-    //     .spawn(move || {
-    //         sampler.take_samples_indefinitely();
-    //     })
-    //     .unwrap();
-    //
-    // communicator.run();
+    std::thread::Builder::new()
+        .stack_size(10000)
+        .spawn(move || {
+            sampler.take_samples_indefinitely();
+        })
+        .unwrap();
 
-    communicator.run_with_sampler_in_same_thread(&mut sampler);
+    communicator.run();
+
+    //communicator.run_with_sampler_in_same_thread(&mut sampler);
     Ok(())
 }
 
@@ -117,8 +117,8 @@ fn wifi(
 
     info!("Wifi configuration set, about to get status");
 
-    wifi.wait_status_with_timeout(Duration::from_secs(20), |status| !status.is_transitional())
-        .map_err(|e| anyhow::anyhow!("Unexpected Wifi status: {:?}", e))?;
+    // wifi.wait_status_with_timeout(Duration::from_secs(20), |status| !status.is_transitional())
+    //     .map_err(|e| anyhow::anyhow!("Unexpected Wifi status: {:?}", e))?;
 
     let status = wifi.get_status();
 
@@ -207,6 +207,7 @@ struct ConnectedSupervisor {
 }
 
 struct Communicator {
+    step_index: u64,
     server_run_id: ServerRunId,
     sample_receiver: Receiver<Samples>,
     recent_samples: Vec<Samples>,
@@ -222,6 +223,7 @@ impl Communicator {
         socket.set_nonblocking(true).unwrap();
         info!("S");
         Communicator {
+            step_index: 0,
             server_run_id: random(),
             sample_receiver,
             recent_samples: vec![Samples::default(); 1000],
@@ -235,22 +237,34 @@ impl Communicator {
         let index1 = usize::try_from(self.latest_sample_index % 1000).unwrap();
         let index2 = usize::try_from((self.latest_sample_index + 500) % 1000).unwrap();
         if index1 >= self.recent_samples.len() || index2 >= self.recent_samples.len() {
-            info!(
+            panic!(
                 "bounds?? {} {} {}",
                 index1,
                 index2,
                 self.recent_samples.len()
             );
         }
-        *self.recent_samples.get_mut(index1).unwrap() = sample;
+        let slice = self.recent_samples.as_mut_slice();
+        let position = slice.get_mut(index1).unwrap();
+        *position = sample;
         self.recent_samples[index2] = sample;
         self.latest_sample_index += 1;
     }
     fn receive_update_if_any(&mut self) {
-        if let Ok((size, address)) = self.socket.recv_from(&mut self.receive_buffer) {
+        while let Ok((size, address)) = self.socket.recv_from(&mut self.receive_buffer) {
             if let Ok(message) =
                 bincode::deserialize::<MessageToServer>(&self.receive_buffer[..size])
             {
+                if self.step_index % 33 == 0 {
+                    info!(
+                        "received: {:?}",
+                        (
+                            message.server_run_id == self.server_run_id,
+                            self.latest_sample_index as i64
+                                - message.latest_received_sample_index as i64
+                        )
+                    );
+                }
                 self.current_supervisor = Some(ConnectedSupervisor {
                     address,
                     last_acknowledged_sample_index: if message.server_run_id == self.server_run_id {
@@ -264,6 +278,7 @@ impl Communicator {
     }
     fn send_update(&mut self) {
         if let Some(supervisor) = &self.current_supervisor {
+            let first = Instant::now();
             if let Some(num_unacknowledged_samples) = self
                 .latest_sample_index
                 .checked_sub(supervisor.last_acknowledged_sample_index)
@@ -284,36 +299,72 @@ impl Communicator {
                         .unwrap();
                     let unacknowledged_samples =
                         &self.recent_samples[end.saturating_sub(samples_to_send)..end];
+                    let second = Instant::now();
                     let buf = bincode::serialize(&ReportFromServer {
                         server_run_id: self.server_run_id,
                         latest_sample_index: self.latest_sample_index,
                         samples: unacknowledged_samples,
                     })
                     .unwrap();
+                    let third = Instant::now();
                     let _ = self.socket.send_to(&buf, supervisor.address);
+                    let fourth = Instant::now();
+                    if self.step_index % 33 == 0 {
+                        info!(
+                            "sent: {:?}",
+                            (
+                                unacknowledged_samples.len(),
+                                second - first,
+                                third - second,
+                                fourth - third,
+                            )
+                        );
+                    }
                 }
             }
         }
     }
     fn run(&mut self) {
         loop {
+            let mut count = 1;
             self.store_sample(self.sample_receiver.recv().unwrap());
             while let Ok(sample) = self.sample_receiver.try_recv() {
                 self.store_sample(sample);
+                count += 1;
             }
             self.receive_update_if_any();
             self.send_update();
-            FreeRtos.delay_us(300u32);
+            if self.step_index % 33 == 0 {
+                info!("step: {:?}", (count,));
+            }
+            self.step_index += 1;
+            FreeRtos.delay_us(3000u32);
         }
     }
 
     fn run_with_sampler_in_same_thread(&mut self, sampler: &mut Sampler) {
         loop {
+            let first = Instant::now();
             sampler.take_sample();
+            let second = Instant::now();
             self.store_sample(self.sample_receiver.recv().unwrap());
+            let third = Instant::now();
             self.receive_update_if_any();
+            let fourth = Instant::now();
             self.send_update();
+            let fifth = Instant::now();
             sampler.wait_for_next_sample();
+            let sixth = Instant::now();
+            info!(
+                "{:?}",
+                (
+                    second - first,
+                    third - second,
+                    fourth - third,
+                    fifth - fourth,
+                    sixth - fifth
+                )
+            );
         }
     }
 }
