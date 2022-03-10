@@ -6,6 +6,8 @@ use embedded_svc::wifi::{
     Configuration, Status, Wifi,
 };
 use emg_mouse_shared::{MessageToServer, ReportFromServer, Samples, ServerRunId};
+use esp32_hal::interrupt;
+use esp32_hal::prelude::CriticalSectionSpinLockMutex;
 use esp_idf_hal::adc;
 use esp_idf_hal::adc::{Atten11dB, PoweredAdc, ADC1};
 use esp_idf_hal::delay::{Ets, FreeRtos};
@@ -68,12 +70,39 @@ fn main() -> Result<()> {
         sender,
     );
 
-    std::thread::Builder::new()
-        .stack_size(10000)
-        .spawn(move || {
-            sampler.take_samples_indefinitely();
-        })
-        .unwrap();
+    esp32_hal::prelude::Mutex::lock(&mut &SAMPLER, |contents| *contents = Some(sampler));
+
+    // unsafe:
+    // I'm using both esp32_hal and esp_idf_hal because they provide different features that I need
+    // I THINK this will work as long as I don't use any of the same peripherals?
+    // anyway, using absolute paths for most things in esp32_hal so there aren't any confusions about imports
+    let dp = esp32_hal::target::Peripherals::take().unwrap();
+    let (_, dport_clock_control) = esp32_hal::dport::Split::split(dp.DPORT);
+
+    let clkcntrl = esp32_hal::clock_control::ClockControl::new(
+        dp.RTCCNTL,
+        dp.APB_CTRL,
+        dport_clock_control,
+        esp32_hal::clock_control::XTAL_FREQUENCY_AUTO,
+    )
+    .unwrap();
+
+    let (clkcntrl_config, mut watchdog_rtc) = clkcntrl.freeze().unwrap();
+    let (mut timer0, mut timer1, mut timer2, mut watchdog0) =
+        esp32_hal::timer::Timer::new(dp.TIMG0, clkcntrl_config);
+    esp32_hal::interrupt::enable_with_priority(
+        esp32_hal::get_core(),
+        esp32_hal::interrupt::Interrupt::TG0_T0_EDGE_INTR,
+        esp32_hal::interrupt::InterruptLevel(1),
+    );
+    esp32_hal::prelude::CountDown::start(&mut timer0, esp32_hal::prelude::MilliSeconds(1));
+
+    // std::thread::Builder::new()
+    //     .stack_size(10000)
+    //     .spawn(move || {
+    //         sampler.take_samples_indefinitely();
+    //     })
+    //     .unwrap();
 
     communicator.run();
 
@@ -161,6 +190,9 @@ struct Sampler {
     sender: Sender<Samples>,
 }
 
+static SAMPLER: CriticalSectionSpinLockMutex<Option<Sampler>> =
+    CriticalSectionSpinLockMutex::new(None);
+
 impl Sampler {
     fn new(peripherals: SamplingPeripherals, sender: Sender<Samples>) -> Sampler {
         Sampler {
@@ -199,6 +231,14 @@ impl Sampler {
             self.wait_for_next_sample();
         }
     }
+}
+
+#[interrupt]
+fn TG0_T0_EDGE_INTR() {
+    esp32_hal::prelude::Mutex::lock(&mut &SAMPLER, |contents| {
+        let sampler = contents.as_mut().unwrap();
+        sampler.take_sample();
+    });
 }
 
 struct ConnectedSupervisor {
