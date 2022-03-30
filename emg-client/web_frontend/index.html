@@ -20,6 +20,7 @@ const context = canvas.getContext ("2d");
 const enabled_checkbox = document.getElementById ("enabled_checkbox");
 
 let previous_data = null;
+let display_detail = 1.0;
 
 enabled_checkbox.addEventListener("click", e => {
   fetch ("/input", {
@@ -38,7 +39,11 @@ enabled_checkbox.addEventListener("click", e => {
         function print_line (history_index, history, key) {
             const last = history[history.length - 1];
             context.beginPath();
-            history.forEach((frame, index) => {
+            // history.forEach((frame, index) => {
+            const increments = Math.floor ((history.length-2)* Math.min(1.0,display_detail*2))+2;
+            for (let i = 0; i < increments; i++) {
+              const index = Math.floor(i * (history.length-1) / (increments-1));
+              const frame = history[index];
               const x = canvas.width * (1.0 - (last.time - frame.time) / 0.8 + history_index) / data.histories.length;
               let y = frame [key];
               y = (-Math.log(y * 0.99 + 0.01) / Math.log(0.01) + 1)
@@ -48,7 +53,7 @@ enabled_checkbox.addEventListener("click", e => {
                  } else {
                   context.lineTo(x,y);
                   }
-            });
+            }
             context.stroke();
         }
         const colors = ["#888800", "#880088", "#000000", "#008888"];
@@ -68,7 +73,11 @@ enabled_checkbox.addEventListener("click", e => {
         const freq_colors = [[1, 15, 0], [15, 0, 1], [5, 1, 0], [0, 2, 15]];
         data.frequencies_histories.forEach((frequencies_history, history_index) => {
             const fc = freq_colors[history_index];
-            frequencies_history.forEach((frequencies, time_index) => {
+            // frequencies_history.forEach((frequencies, time_index) => {
+            const increments = Math.floor ((frequencies_history.length-1)* display_detail)+1;
+            for (let i = 0; i < increments; i++) {
+              const time_index = Math.floor(i * (frequencies_history.length-1) / (increments-1));
+              const frequencies = frequencies_history [time_index];
                 const box_width = canvas.width / frequencies_history.length / data.frequencies_histories.length;
                 const box_height = canvas.height / frequencies_history [0].length / 2;
                 frequencies.forEach((intensity, frequency_index) => {
@@ -77,9 +86,13 @@ enabled_checkbox.addEventListener("click", e => {
                         ${Math.floor(ic * fc[0])},
                         ${Math.floor(ic * fc[1])},
                         ${Math.floor(ic * fc[2])})`;
-                    context.fillRect(time_index * box_width + history_index * canvas.width / data.frequencies_histories.length, frequency_index * box_height+ canvas.height / 2, box_width, box_height);
+                    context.fillRect(
+                      time_index * box_width + history_index * canvas.width / data.frequencies_histories.length,
+                      frequency_index * box_height + canvas.height / 2,
+                      box_width * (frequencies_history.length / increments),
+                      box_height);
                 })
-            })
+            }
         })
       }
       function update_followers(data) {
@@ -114,9 +127,18 @@ enabled_checkbox.addEventListener("click", e => {
             if (response.ok) {
               const data = await response.json();
               if (data !== null) {
+              const display_start_time = performance.now();
                 update_canvas(data);
                 update_followers(data);
                 enabled_checkbox.checked = data.enabled;
+                const duration = performance.now() - display_start_time;
+                if (duration < 2) {
+                  display_detail = Math.min (display_detail*1.1,1.0);
+                }
+                if (duration > 4) {
+                  display_detail *= 0.9;
+                }
+                //console.log (duration);
               }
             }
           }
