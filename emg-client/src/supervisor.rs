@@ -19,9 +19,10 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use stubborn_io::{ReconnectOptions, StubbornTcpStream};
 use tokio::io::AsyncReadExt;
+use tokio::net::TcpStream;
 use tokio::task;
+use tokio::time::timeout;
 use tokio_stream::StreamExt;
 
 pub struct SupervisorOptions {
@@ -69,6 +70,12 @@ pub struct MessageFromServer {
     server_index: usize,
     local_time_received: Instant,
     report: ReportFromServer,
+}
+
+#[derive(Debug, Message)]
+#[rtype(result = "()")]
+pub struct ServerReconnected {
+    server_index: usize,
 }
 
 #[derive(Message)]
@@ -210,6 +217,14 @@ impl Handler<MessageFromIdentifiedFollower> for Supervisor {
     }
 }
 
+impl Handler<ServerReconnected> for Supervisor {
+    type Result = ();
+
+    fn handle(&mut self, message: ServerReconnected, _context: &mut Self::Context) -> Self::Result {
+        let ServerReconnected { server_index } = message;
+        self.servers[server_index].reconnected();
+    }
+}
 impl Handler<MessageFromServer> for Supervisor {
     type Result = ();
 
@@ -219,11 +234,6 @@ impl Handler<MessageFromServer> for Supervisor {
             local_time_received,
             report,
         } = message;
-        if let Some(previous) = self.servers[server_index].signals[0].history.back() {
-            if !(0.0..1.0).contains(&(report.time_since_start.as_secs_f64() - previous.time)) {
-                self.servers[server_index].reconnected();
-            }
-        }
         self.servers[server_index]
             .remote_time_estimator
             .observe(report.time_since_start.as_secs_f64(), local_time_received);
@@ -343,34 +353,54 @@ impl Supervisor {
         for (server_index, server_address) in server_addresses.iter().cloned().enumerate() {
             let supervisor = supervisor.clone();
             task::spawn(async move {
-                let mut server_stream = StubbornTcpStream::connect_with_options(
-                    server_address,
-                    ReconnectOptions::new()
-                        .with_exit_if_first_connect_fails(false)
-                        .with_retries_generator(|| std::iter::repeat(Duration::from_secs(1))),
-                )
-                .await
-                .unwrap();
-                let size = bincode::serialized_size(&ReportFromServer::default()).unwrap() as usize;
-                let mut buffer = vec![0u8; size];
+                let report_size =
+                    bincode::serialized_size(&ReportFromServer::default()).unwrap() as usize;
+                let mut buffer = vec![0u8; report_size];
                 loop {
-                    match server_stream.read_exact(&mut buffer).await {
-                        Ok(s) => {
-                            let local_time_received = Instant::now();
-                            assert_eq!(s, size);
-                            match bincode::deserialize(&buffer) {
-                                Ok(report) => supervisor.do_send(MessageFromServer {
-                                    server_index,
-                                    local_time_received,
-                                    report,
-                                }),
-                                Err(e) => {
-                                    eprintln!("Bincode error reading from server: {}", e);
+                    let mut server_stream =
+                        match timeout(Duration::from_secs(2), TcpStream::connect(server_address))
+                            .await
+                        {
+                            Ok(Ok(server_stream)) => server_stream,
+                            Ok(Err(e)) => {
+                                eprintln!("Server TcpStream connection error: {}", e);
+                                continue;
+                            }
+                            Err(_) => {
+                                eprintln!("Server TcpStream connection timed out");
+                                continue;
+                            }
+                        };
+                    supervisor.do_send(ServerReconnected { server_index });
+                    loop {
+                        match timeout(
+                            Duration::from_secs(2),
+                            server_stream.read_exact(&mut buffer),
+                        )
+                        .await
+                        {
+                            Ok(Ok(s)) => {
+                                let local_time_received = Instant::now();
+                                assert_eq!(s, report_size);
+                                match bincode::deserialize(&buffer) {
+                                    Ok(report) => supervisor.do_send(MessageFromServer {
+                                        server_index,
+                                        local_time_received,
+                                        report,
+                                    }),
+                                    Err(e) => {
+                                        eprintln!("Bincode error reading from server: {}", e);
+                                    }
                                 }
                             }
-                        }
-                        Err(e) => {
-                            eprintln!("IO error reading from server: {}", e);
+                            Ok(Err(e)) => {
+                                eprintln!("IO error reading from server: {}", e);
+                                break;
+                            }
+                            Err(_) => {
+                                eprintln!("Timed out reading from server");
+                                break;
+                            }
                         }
                     }
                 }
