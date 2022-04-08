@@ -33,9 +33,9 @@ impl Default for ActiveState {
     }
 }
 impl Signal {
-    pub fn new() -> Signal {
-        Signal::default()
-    }
+    // pub fn new() -> Signal {
+    //     Signal::default()
+    // }
     pub fn is_active(&self) -> bool {
         matches!(self.active_state, ActiveState::Active { .. })
     }

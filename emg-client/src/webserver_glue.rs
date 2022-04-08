@@ -1,14 +1,14 @@
-use crate::supervisor::MessageToSupervisor;
 use crate::webserver::{FrontendState, MessageFromFrontend};
+use crate::Supervisor;
+use actix::Addr;
 use actix_files::NamedFile;
 use actix_web::{get, post, web, App, HttpServer, Responder};
 use crossbeam::atomic::AtomicCell;
 use std::path::PathBuf;
-use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 struct WebserverState {
-    sender: Mutex<Sender<MessageToSupervisor>>,
+    supervisor: Addr<Supervisor>,
     state_updater: Arc<AtomicCell<Option<FrontendState>>>,
     static_files: PathBuf,
 }
@@ -24,12 +24,7 @@ async fn input(
     input: web::Json<MessageFromFrontend>,
 ) -> &'static str {
     let web::Json(input) = input;
-    webserver_state
-        .sender
-        .lock()
-        .unwrap()
-        .send(MessageToSupervisor::FromFrontend(input))
-        .unwrap();
+    webserver_state.supervisor.do_send(input);
     ""
 }
 
@@ -40,13 +35,13 @@ async fn index(webserver_state: web::Data<WebserverState>) -> Option<NamedFile> 
 
 pub async fn launch(
     state_updater: Arc<AtomicCell<Option<FrontendState>>>,
-    sender: Sender<MessageToSupervisor>,
+    supervisor: Addr<Supervisor>,
     static_files: PathBuf,
     port: u16,
 ) -> anyhow::Result<()> {
     let state = web::Data::new(WebserverState {
         state_updater,
-        sender: Mutex::new(sender),
+        supervisor,
         static_files,
     });
     HttpServer::new(move || {

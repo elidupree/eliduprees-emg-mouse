@@ -1,7 +1,9 @@
+use actix::Message;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 
-#[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
+#[derive(Clone, PartialEq, Serialize, Deserialize, Debug, Message)]
+#[rtype(result = "()")]
 pub enum MessageFromFrontend {
     SetEnabled(bool),
 }

@@ -11,6 +11,7 @@ mod webserver_glue;
 use crate::follower::LocalFollower;
 use crate::supervisor::{Supervisor, SupervisorOptions};
 use clap::{App, AppSettings, Arg, SubCommand};
+use rodio::OutputStream;
 
 #[actix_web::main]
 async fn main() -> anyhow::Result<()> {
@@ -84,7 +85,9 @@ async fn main() -> anyhow::Result<()> {
             .await
         }
         ("follower", Some(matches)) => {
-            LocalFollower::new()
+            let (_audio_output_stream, audio_output_stream_handle) =
+                OutputStream::try_default().unwrap();
+            LocalFollower::new(audio_output_stream_handle)
                 .listen_to_remote(
                     matches.value_of("supervisor-address").unwrap(),
                     matches.value_of("supervisor-cert-path").unwrap(),

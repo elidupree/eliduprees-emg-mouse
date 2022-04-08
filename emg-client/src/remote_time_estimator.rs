@@ -26,6 +26,12 @@ pub struct RemoteTimeEstimator {
     before_middle_index: usize,
 }
 
+impl Default for RemoteTimeEstimator {
+    fn default() -> Self {
+        Self::new(Duration::from_micros(200))
+    }
+}
+
 impl RemoteTimeEstimator {
     pub fn new(tolerance: Duration) -> Self {
         RemoteTimeEstimator {
