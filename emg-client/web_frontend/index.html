@@ -21,6 +21,7 @@ const enabled_checkbox = document.getElementById ("enabled_checkbox");
 
 let previous_data = null;
 let display_detail = 1.0;
+let updated_until = 0.0;
 
 enabled_checkbox.addEventListener("click", e => {
   fetch ("/input", {
@@ -32,7 +33,125 @@ enabled_checkbox.addEventListener("click", e => {
   });
 });
 
+function update_signal_canvas(
+    canvas,context,
+    left,top,right, bottom,
+    start_time, stop_time,
+    recent_frames, recent_frequencies,
+    line_color, frequency_color) {
+  const width = right - left;
+  const height = bottom - top;
+  const canvas_duration = 0.8;
+  const time_duration = stop_time - start_time;
+  const start_integer = Math.floor (start_time * width / canvas_duration);
+  const stop_integer = Math.floor (stop_time * width / canvas_duration);
+  let new_area_width = stop_integer - start_integer;
+  let old_area_width = width - new_area_width;
+  context.save();
+  if (old_area_width < 0) {
+    context.clearRect(left, top, width, height);
+    context.beginPath();
+    context.rect(left, top, width, height);
+    context.clip ();
+  } else {
+    const data = context.getImageData(
+      left+ new_area_width, top, old_area_width, height,
+    )
+    context.clearRect(left, top, width, height);
+    //context.drawImage(data, left, top)
+    context.putImageData(data, left, top)
+    /*context.drawImage(
+      canvas,
+      left+ new_area_width, top, old_area_width, height,
+      left, top,old_area_width, height,
+    )*/
+    /*context.putImageData(
+      canvas,
+      left, top,
+      left+ new_area_width, top, old_area_width, height,
+    )*/
+    context.beginPath();
+    //context.clearRect(left+ old_area_width, top, new_area_width, height);
+    context.rect(left+ old_area_width, top, new_area_width, height);
+    context.clip ();
+  }
+
+        function print_line (key) {
+            context.beginPath();
+            for (let i = recent_frames.length - 1; i >= 0; i--) {
+              const frame = recent_frames[i];
+              const how_far_back = (stop_time - frame.time) * width / canvas_duration;
+              //console.log (how_far_back,new_area_width);
+              const x = right - how_far_back;
+              let y = frame [key];
+              y = (-Math.log(y * 0.99 + 0.01) / Math.log(0.01) + 1)
+              y *= height / 2;
+y+= top;
+              if (i == history.length - 1) {
+                context.moveTo(x,y)
+                 } else {
+                  context.lineTo(x,y);
+                  }
+                  if (how_far_back> new_area_width +2) {break;}
+            }
+            context.stroke();
+        }
+
+            context.strokeStyle = line_color;
+  print_line ("value");
+
+            context.strokeStyle = "#88ff88";
+  print_line ("activity_threshold");
+
+            context.strokeStyle = "#ff8888";
+  print_line ("too_much_threshold");
+
+
+            const fc = frequency_color;
+
+        function x(i) {
+          return Math.floor (left+ old_area_width+ i*new_area_width/ recent_frequencies.length)
+        }
+        function y(j) {
+          return Math.floor (top+ height/2 + j*(height/2)/ recent_frequencies[0].length)
+        }
+        recent_frequencies.forEach((frequencies, i) => {
+                frequencies.forEach((intensity, j) => {
+                    const ic = 255 * intensity;
+                    context.fillStyle = `rgb(
+                        ${Math.floor(ic * fc[0])},
+                        ${Math.floor(ic * fc[1])},
+                        ${Math.floor(ic * fc[2])})`;
+                    context.fillRect(
+                      x(i),
+                      y(j),
+                      x(i+1)-x(i),
+                      y(j+1)-y(j));
+                })
+            })
+
+  context.restore();
+}
+        const colors = ["#888800", "#880088", "#000000", "#008888"];
+        const freq_colors = [[1, 15, 0], [15, 0, 1], [5, 1, 0], [0, 2, 15]];
+
       function update_canvas(data) {
+        const stop_time = data.histories [0][data.histories [0].length - 1].time;
+        function x(i) {
+          return Math.floor (i*canvas.width/ data.histories.length)
+        }
+        data.histories.forEach((history, index) => {
+        const fh = data.frequencies_histories[index];
+            update_signal_canvas(
+    canvas,context,
+    x(index),0,x(index+1), canvas.height,
+    updated_until, stop_time,
+    history, fh.slice(Math.max(0, fh.length - 2), fh.length),
+    colors [index], freq_colors[index])
+        });
+
+        updated_until = stop_time;
+      /*
         context.clearRect (0, 0, canvas.width, canvas.height);
         context.fillStyle = "black";
         context.fillRect(0, canvas.height/2, canvas.width, canvas.height);
@@ -56,7 +175,6 @@ enabled_checkbox.addEventListener("click", e => {
             }
             context.stroke();
         }
-        const colors = ["#888800", "#880088", "#000000", "#008888"];
         data.histories.forEach((history, index) => {
             context.strokeStyle = colors[index];
             print_line (index,history, "value");
@@ -70,7 +188,6 @@ enabled_checkbox.addEventListener("click", e => {
                 print_line (index,history, "too_much_threshold");
         });
 
-        const freq_colors = [[1, 15, 0], [15, 0, 1], [5, 1, 0], [0, 2, 15]];
         data.frequencies_histories.forEach((frequencies_history, history_index) => {
             const fc = freq_colors[history_index];
             // frequencies_history.forEach((frequencies, time_index) => {
@@ -93,7 +210,7 @@ enabled_checkbox.addEventListener("click", e => {
                       box_height);
                 })
             }
-        })
+        })*/
       }
       function update_followers(data) {
         const ids = {};
