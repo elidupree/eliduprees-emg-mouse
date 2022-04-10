@@ -44,13 +44,15 @@ impl RemoteTimeEstimator {
     pub fn observe(&mut self, remote_time: f64, received_by: Instant) {
         if let Some(&(last_remote, last_received)) = self.frontier.last() {
             assert!(
-                remote_time >= last_remote,
-                "RemoteTimeEstimator assumes observations will be received in-order by remote time"
-            );
-            assert!(
                 received_by >= last_received,
                 "RemoteTimeEstimator assumes observations will be received in-order by local received time"
             );
+            if remote_time < last_remote {
+                eprintln!(
+                    "warning: RemoteTimeEstimator got observation that were not in-order by remote time, and is ignoring it (TODO: decide how to handle this)"
+                );
+                return;
+            }
             if remote_time == last_remote {
                 // receiving the same thing again but later tells us nothing,
                 // and may cause division by zero below
@@ -95,7 +97,12 @@ impl RemoteTimeEstimator {
             .get(self.before_middle_index..self.before_middle_index + 2)
         {
             let &[(ar, al), (br, bl)]: &[_; 2] = slice.try_into().unwrap();
-            al + Duration::from_secs_f64((bl - al).as_secs_f64() * (remote_time - ar) / (br - ar))
+            let offset = (bl - al).as_secs_f64() * (remote_time - ar) / (br - ar);
+            if offset >= 0.0 {
+                al + Duration::from_secs_f64(offset)
+            } else {
+                al - Duration::from_secs_f64(-offset)
+            }
         } else if let Some(&(_, first_local)) = self.frontier.first() {
             first_local
         } else {

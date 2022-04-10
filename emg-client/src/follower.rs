@@ -144,26 +144,29 @@ impl LocalFollower {
             .send_bincode_oneshot_stream(&FollowerIntroduction { name })
             .await?;
 
-        let (sender_from_supervisor, receiver_from_supervisor) = std::sync::mpsc::channel();
-        task::spawn(async move {
-            while let Ok(Some(message)) = datagrams.next_bincode().await {
-                sender_from_supervisor.send(message).unwrap();
-            }
+        std::thread::spawn(|| {
+            let start = Instant::now();
+            let mut last_sent = Instant::now();
+            rdev::listen(move |event| match event.event_type {
+                rdev::EventType::MouseMove { .. } => {
+                    let now = Instant::now();
+                    if now - last_sent >= Duration::from_millis(1) {
+                        let time_since_start = now - start;
+                        let message = MessageFromFollower::MouseMoved { time_since_start };
+                        if let Err(e) = connection.send_bincode_datagram(&message) {
+                            eprintln!("error sending to supervisor: {:?}", e)
+                        }
+                        last_sent = now;
+                    }
+                }
+                _ => {}
+            })
+            .unwrap();
         });
-
-        let start = Instant::now();
-        loop {
-            while let Ok(message) = receiver_from_supervisor.try_recv() {
-                self.handle_message(message);
-            }
-            if let Some(_update) = self.update_most_recent_mouse_move() {
-                let now = Instant::now();
-                let time_since_start = now - start;
-                let message = MessageFromFollower::MouseMoved { time_since_start };
-                connection.send_bincode_datagram(&message)?;
-            }
-            tokio::time::sleep(Duration::from_millis(1)).await;
+        while let Ok(Some(message)) = datagrams.next_bincode().await {
+            self.handle_message(message);
         }
+        Ok(())
     }
 
     fn update_most_recent_mouse_move(&mut self) -> Option<Instant> {
