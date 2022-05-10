@@ -11,3 +11,7 @@ My personal project to use EMG sensors for mouse input. Not intended to be an ou
 * `emg_client follower`: I run this on my Linux computer. It connects to a remote `emg_client supervisor`, and emits mouse inputs when instructed.
 
 `supervisor/`: Out-of-date (original attempt at the emg-client role, in Python)
+
+`emg-server-c/`: WIP new version of the EMG server, written in C because I wanted to use some features (like BLE) that weren't exposed by Rust's `esp-idf-hal`, based on the ESP-IDF gatts_server_service_table and adc_dma examples.
+
+`bluetooth-test/`: simple Rust program for connecting to `emg-server-c`
