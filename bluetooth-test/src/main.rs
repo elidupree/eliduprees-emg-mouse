@@ -5,6 +5,7 @@ use btleplug::api::{
 use btleplug::platform::{Adapter, Manager, Peripheral};
 use futures::stream::StreamExt;
 use std::time::{Duration, Instant};
+use tokio::time::timeout;
 
 //const LIGHT_CHARACTERISTIC_UUID: Uuid = uuid_from_u16(0xFFE9);
 
@@ -27,42 +28,65 @@ async fn main() {
         match event {
             CentralEvent::DeviceDiscovered(id) => {
                 println!("DeviceDiscovered: {:?}", id);
-                let p = central.peripheral(&id).await.unwrap();
+                let mut p = central.peripheral(&id).await.unwrap();
                 dbg!(&p);
                 if let Ok(Some(pr)) = p.properties().await {
                     dbg!(&pr.local_name);
-                    if pr.local_name.as_deref() == Some("ESP_GATTS_DEMO") {
+                    if pr.local_name.as_deref() == Some("ELI_EMG_SERVER") {
                         if p.connect().await.is_ok() {
                             p.discover_services().await.unwrap();
                             dbg!(p.characteristics());
                             let mut stream = p.notifications().await.unwrap();
-                            for characteristic in p.characteristics() {
-                                if characteristic.properties.contains(CharPropFlags::NOTIFY) {
-                                    println!(
-                                        "Subscribing to characteristic {:?}",
-                                        characteristic.uuid
-                                    );
-                                    p.subscribe(&characteristic).await.unwrap();
+                            async fn subscribe(p: &Peripheral) -> anyhow::Result<()> {
+                                for characteristic in p.characteristics() {
+                                    if characteristic.properties.contains(CharPropFlags::NOTIFY) {
+                                        println!(
+                                            "Subscribing to characteristic {:?}",
+                                            characteristic.uuid
+                                        );
+                                        p.unsubscribe(&characteristic).await?;
+                                        p.subscribe(&characteristic).await?;
+                                    }
                                 }
+                                Ok(())
                             }
+                            let _ = subscribe(&p).await;
                             let start = Instant::now();
                             let mut count = 0;
                             let mut amount = 0;
-                            while let Some(notification) = stream.next().await {
-                                // dbg!(notification);
-                                count += 1;
-                                amount += notification.value.len();
-                                if count % 1 == 0 {
-                                    let e = start.elapsed();
-                                    println!(
-                                        "{}, {}: {}, {:?}, {}, {}",
-                                        count,
-                                        amount,
-                                        notification.value.len(),
-                                        e,
-                                        amount as f64 / e.as_secs_f64(),
-                                        count as f64 / e.as_secs_f64()
-                                    );
+                            loop {
+                                match timeout(Duration::from_secs(1), stream.next()).await {
+                                    Ok(Some(notification)) => {
+                                        // dbg!(notification);
+                                        count += 1;
+                                        amount += notification.value.len();
+                                        if count % 1 == 0 {
+                                            let e = start.elapsed();
+                                            println!(
+                                                "{}, {}: {}, {:?}, {}, {}",
+                                                count,
+                                                amount,
+                                                notification.value.len(),
+                                                e,
+                                                amount as f64 / e.as_secs_f64(),
+                                                count as f64 / e.as_secs_f64()
+                                            );
+                                        }
+                                    }
+                                    _ => {
+                                        eprintln!("Timeout...?");
+                                        dbg!(p.is_connected().await);
+                                        // p.disconnect().await;
+                                        if let Ok(pn) = central.peripheral(&id).await {
+                                            p = pn;
+                                        }
+                                        while p.connect().await.is_err() {
+                                            tokio::time::sleep(Duration::from_millis(500)).await;
+                                        }
+                                        let _ = p.discover_services().await;
+                                        let _ = subscribe(&p).await;
+                                        stream = p.notifications().await.unwrap();
+                                    }
                                 }
                             }
                         }

@@ -44,7 +44,7 @@
 #define PROFILE_NUM                 1
 #define PROFILE_APP_IDX             0
 #define ESP_APP_ID                  0x55
-#define SAMPLE_DEVICE_NAME          "ESP_GATTS_DEMO"
+#define SAMPLE_DEVICE_NAME          "ELI_EMG_SERVER"
 #define SVC_INST_ID                 0
 
 volatile esp_gatt_if_t ghack = 0;
@@ -82,7 +82,7 @@ static uint8_t raw_adv_data[] = {
         /* service uuid */
         0x03, 0x03, 0xFF, 0x00,
         /* device name */
-        0x0f, 0x09, 'E', 'S', 'P', '_', 'G', 'A', 'T', 'T', 'S', '_', 'D','E', 'M', 'O'
+        0x0f, 0x09, 'E', 'L', 'I', '_', 'E', 'M', 'G', '_', 'S', 'E', 'R', 'V', 'E', 'R'
 };
 static uint8_t raw_scan_rsp_data[] = {
         /* flags */
@@ -582,6 +582,9 @@ volatile uint16_t send_buffer[SEND_BUFFER_SIZE];
 const uint16_t SEND_BUFFER_UNUSED = 0xffff;
 
 void ble_task(void* arg) {
+
+    while (!ghack_ready) {vTaskDelay(1);}
+
   uint64_t send_buffer_read_pos = 0;
   uint16_t send_size = 0;
   const uint16_t MAX_SEND_SIZE = 62*8;
@@ -606,8 +609,10 @@ void ble_task(void* arg) {
     }
 
     if (send_size > 0) {
-      esp_ble_gatts_send_indicate(ghack, hack_conn_id, heart_rate_handle_table[IDX_CHAR_VAL_A],
-                                  send_size, notify_data, false);
+      if (ghack_ready) {
+        esp_ble_gatts_send_indicate(ghack, hack_conn_id, heart_rate_handle_table[IDX_CHAR_VAL_A],
+                                    send_size, notify_data, false);
+      }
       send_size = 0;
     }
     vTaskDelay(1);
@@ -617,6 +622,7 @@ void ble_task(void* arg) {
 void adc_task(void * arg) {
 
     esp_err_t ret;
+
     uint32_t ret_num = 0;
     uint8_t result[TIMES] = {0};
     uint32_t n = 0;
@@ -695,6 +701,7 @@ void adc_task(void * arg) {
 
 void app_main(void)
 {
+
     esp_err_t ret;
 
     /* Initialize NVS. */
@@ -754,9 +761,6 @@ void app_main(void)
     if (local_mtu_ret){
         ESP_LOGE(GATTS_TABLE_TAG, "set local  MTU failed, error code = %x", local_mtu_ret);
     }
-
-    while (!ghack_ready) {vTaskDelay(1);}
-
 //    int j = 0;
 //    while(true) {
 //      j++;
@@ -770,20 +774,18 @@ void app_main(void)
 //      if ((j % 100) == 0) {vTaskDelay(1);}
 //    }
 
-
-
-
-    for (uint16_t i = 0; i < SEND_BUFFER_SIZE; ++i) {
-      send_buffer[i] = SEND_BUFFER_UNUSED;
-    }
     continuous_adc_init(adc1_chan_mask, channel, sizeof(channel) / sizeof(adc_channel_t));
 //    int d=8e7/(I2S0.clkm_conf.clkm_div_num+I2S0.clkm_conf.clkm_div_b/I2S0.clkm_conf.clkm_div_a)/2000+0.5;
 //    SET_PERI_REG_BITS(I2S_SAMPLE_RATE_CONF_REG(0), I2S_RX_BCK_DIV_NUM, d, I2S_RX_BCK_DIV_NUM_S);
     adc_digi_start();
 
+    for (uint16_t i = 0; i < SEND_BUFFER_SIZE; ++i) {
+      send_buffer[i] = SEND_BUFFER_UNUSED;
+    }
+
 
     xTaskCreatePinnedToCore(adc_task, "AdcTask", 2*1024, NULL, 5, NULL, 1);
-    xTaskCreatePinnedToCore(ble_task, "BleTask", 2*1024, NULL, 5, NULL, 0);
+    xTaskCreatePinnedToCore(ble_task, "BleTask", 3*1024, NULL, 5, NULL, 0);
 
     //i2s_set_sample_rates(I2S_NUM_0, 2000);
 //    i2s_stop(0);
