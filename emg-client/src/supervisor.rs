@@ -1,3 +1,4 @@
+use crate::bluetooth::messages_from_server;
 use crate::follower::{
     FollowerIntroduction, LocalFollower, MessageFromFollower, RemoteFollower, SupervisedFollower,
     SupervisedFollowerMut,
@@ -19,10 +20,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::io::AsyncReadExt;
-use tokio::net::TcpStream;
 use tokio::task;
-use tokio::time::timeout;
 use tokio_stream::StreamExt;
 
 pub struct SupervisorOptions {
@@ -350,62 +348,80 @@ impl Supervisor {
         }
         .start();
 
-        for (server_index, server_address) in server_addresses.iter().cloned().enumerate() {
+        task::spawn({
             let supervisor = supervisor.clone();
-            task::spawn(async move {
-                let report_size =
-                    bincode::serialized_size(&ReportFromServer::default()).unwrap() as usize;
-                let mut buffer = vec![0u8; report_size];
-                loop {
-                    let mut server_stream =
-                        match timeout(Duration::from_secs(2), TcpStream::connect(server_address))
-                            .await
-                        {
-                            Ok(Ok(server_stream)) => server_stream,
-                            Ok(Err(e)) => {
-                                eprintln!("Server TcpStream connection error: {}", e);
-                                continue;
-                            }
-                            Err(_) => {
-                                eprintln!("Server TcpStream connection timed out");
-                                continue;
-                            }
-                        };
-                    supervisor.do_send(ServerReconnected { server_index });
-                    loop {
-                        match timeout(
-                            Duration::from_secs(2),
-                            server_stream.read_exact(&mut buffer),
-                        )
-                        .await
-                        {
-                            Ok(Ok(s)) => {
-                                let local_time_received = Instant::now();
-                                assert_eq!(s, report_size);
-                                match bincode::deserialize(&buffer) {
-                                    Ok(report) => supervisor.do_send(MessageFromServer {
-                                        server_index,
-                                        local_time_received,
-                                        report,
-                                    }),
-                                    Err(e) => {
-                                        eprintln!("Bincode error reading from server: {}", e);
-                                    }
-                                }
-                            }
-                            Ok(Err(e)) => {
-                                eprintln!("IO error reading from server: {}", e);
-                                break;
-                            }
-                            Err(_) => {
-                                eprintln!("Timed out reading from server");
-                                break;
-                            }
-                        }
-                    }
+            async move {
+                let mut stream = messages_from_server();
+                while let Some(message) = stream.next().await {
+                    let local_time_received = Instant::now();
+                    supervisor.do_send(MessageFromServer {
+                        server_index: 0,
+                        local_time_received,
+                        report: ReportFromServer {
+                            time_since_start: local_time_received - start_time,
+                            inputs: message,
+                        },
+                    })
                 }
-            });
-        }
+            }
+        });
+
+        // for (server_index, server_address) in server_addresses.iter().cloned().enumerate() {
+        //     let supervisor = supervisor.clone();
+        //     task::spawn(async move {
+        //         let report_size =
+        //             bincode::serialized_size(&ReportFromServer::default()).unwrap() as usize;
+        //         let mut buffer = vec![0u8; report_size];
+        //         loop {
+        //             let mut server_stream =
+        //                 match timeout(Duration::from_secs(2), TcpStream::connect(server_address))
+        //                     .await
+        //                 {
+        //                     Ok(Ok(server_stream)) => server_stream,
+        //                     Ok(Err(e)) => {
+        //                         eprintln!("Server TcpStream connection error: {}", e);
+        //                         continue;
+        //                     }
+        //                     Err(_) => {
+        //                         eprintln!("Server TcpStream connection timed out");
+        //                         continue;
+        //                     }
+        //                 };
+        //             supervisor.do_send(ServerReconnected { server_index });
+        //             loop {
+        //                 match timeout(
+        //                     Duration::from_secs(2),
+        //                     server_stream.read_exact(&mut buffer),
+        //                 )
+        //                 .await
+        //                 {
+        //                     Ok(Ok(s)) => {
+        //                         let local_time_received = Instant::now();
+        //                         assert_eq!(s, report_size);
+        //                         match bincode::deserialize(&buffer) {
+        //                             Ok(report) => supervisor.do_send(MessageFromServer {
+        //                                 server_index,
+        //                                 local_time_received,
+        //                                 report,
+        //                             }),
+        //                             Err(e) => {
+        //                                 eprintln!("Bincode error reading from server: {}", e);
+        //                             }
+        //                         }
+        //                     }
+        //                     Ok(Err(e)) => {
+        //                         eprintln!("IO error reading from server: {}", e);
+        //                         break;
+        //                     }
+        //                     Err(_) => {
+        //                         eprintln!("Timed out reading from server");
+        //                         break;
+        //                     }
+        //                 }
+        //             }
+        //         }
+        //     });
+        // }
 
         task::spawn({
             let supervisor = supervisor.clone();

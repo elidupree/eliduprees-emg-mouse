@@ -604,7 +604,7 @@ void ble_task(void* arg) {
       if (send_buffer_read_pos >= SEND_BUFFER_SIZE) {
         send_buffer_read_pos = 0;
       }
-      notify_data[send_size++] = average >> 4;
+      notify_data[send_size++] = average >> 8;
       notify_data[send_size++] = average & 0xff;
     }
 

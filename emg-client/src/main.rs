@@ -1,5 +1,6 @@
 #![feature(type_alias_impl_trait)]
 
+mod bluetooth;
 mod follower;
 mod remote_time_estimator;
 mod signal;

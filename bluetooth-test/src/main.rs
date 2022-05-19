@@ -44,8 +44,12 @@ async fn main() {
                                             "Subscribing to characteristic {:?}",
                                             characteristic.uuid
                                         );
-                                        p.unsubscribe(&characteristic).await?;
+                                        // p.unsubscribe(&characteristic).await?;
                                         p.subscribe(&characteristic).await?;
+                                        // p.subscribe(&characteristic).await?;
+                                        // p.subscribe(&characteristic).await?;
+                                        // p.subscribe(&characteristic).await?;
+                                        // p.subscribe(&characteristic).await?;
                                     }
                                 }
                                 Ok(())
@@ -81,11 +85,16 @@ async fn main() {
                                             p = pn;
                                         }
                                         while p.connect().await.is_err() {
+                                            eprintln!("Connect failed...?");
                                             tokio::time::sleep(Duration::from_millis(500)).await;
                                         }
+                                        eprintln!("Connected");
                                         let _ = p.discover_services().await;
-                                        let _ = subscribe(&p).await;
+                                        // tokio::time::sleep(Duration::from_millis(2000)).await;
                                         stream = p.notifications().await.unwrap();
+                                        let _ = subscribe(&p).await;
+                                        //tokio::time::sleep(Duration::from_millis(2000)).await;
+                                        //tokio::time::sleep(Duration::from_millis(2000)).await;
                                     }
                                 }
                             }
