@@ -9,7 +9,14 @@ use std::time::Duration;
 use tokio::task;
 use tokio::time::timeout;
 
-pub fn messages_from_server() -> impl Stream<Item = [u16; 4]> {
+#[derive(Debug)]
+pub struct ReportFromServer {
+    pub server_run_id: u64,
+    pub first_sample_index: u64,
+    pub samples: Vec<[u16; 4]>,
+}
+
+pub fn messages_from_server() -> impl Stream<Item = ReportFromServer> {
     let (mut sender, receiver) = futures::channel::mpsc::unbounded();
     task::spawn(async move {
         let manager = Manager::new().await.unwrap();
@@ -57,16 +64,29 @@ pub fn messages_from_server() -> impl Stream<Item = [u16; 4]> {
         loop {
             match timeout(Duration::from_secs(1), stream.next()).await {
                 Ok(Some(notification)) => {
-                    for chunk in notification.value.chunks_exact(8) {
-                        let values: [u16; 4] = chunk
-                            .chunks_exact(2)
-                            .map(|p| (u16::from(p[0]) << 8) + u16::from(p[1]))
-                            .collect::<Vec<u16>>()
-                            .try_into()
-                            .unwrap();
-                        if sender.send(values).await.is_err() {
-                            break;
-                        }
+                    let server_run_id =
+                        u64::from_le_bytes((&notification.value[0..8]).try_into().unwrap());
+                    let first_sample_index =
+                        u64::from_le_bytes((&notification.value[8..16]).try_into().unwrap());
+                    let samples = notification.value[16..]
+                        .chunks_exact(8)
+                        .map(|chunk| {
+                            chunk
+                                .chunks_exact(2)
+                                .map(|p| (u16::from(p[0]) << 8) + u16::from(p[1]))
+                                .collect::<Vec<u16>>()
+                                .try_into()
+                                .unwrap()
+                        })
+                        .collect();
+                    let report = ReportFromServer {
+                        server_run_id,
+                        first_sample_index,
+                        samples,
+                    };
+
+                    if sender.send(report).await.is_err() {
+                        break;
                     }
                 }
                 _ => {

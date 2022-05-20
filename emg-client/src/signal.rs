@@ -39,12 +39,7 @@ impl Signal {
     pub fn is_active(&self) -> bool {
         matches!(self.active_state, ActiveState::Active { .. })
     }
-    pub fn receive_raw(
-        &mut self,
-        raw_value: f64,
-        remote_time_since_start: Duration,
-        fft_planner: &mut FftPlanner<f64>,
-    ) {
+    pub fn receive_raw(&mut self, raw_value: f64, time: f64, fft_planner: &mut FftPlanner<f64>) {
         self.total_inputs += 1;
         self.recent_raw_inputs.push_back(raw_value / 1500.0);
         if self.recent_raw_inputs.len() > 1000 {
@@ -101,8 +96,6 @@ impl Signal {
             //     .rev()
             //     .take(VALUE_WINDOW)
             //     .std_dev();
-
-            let time = remote_time_since_start.as_secs_f64();
 
             const CHUNK_SIZE: usize = 500;
             let (activity_threshold, too_much_threshold) = if self.total_inputs % CHUNK_SIZE == 0 {

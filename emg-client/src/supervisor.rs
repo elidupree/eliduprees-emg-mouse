@@ -1,4 +1,5 @@
 use crate::bluetooth::messages_from_server;
+use crate::bluetooth::ReportFromServer;
 use crate::follower::{
     FollowerIntroduction, LocalFollower, MessageFromFollower, RemoteFollower, SupervisedFollower,
     SupervisedFollowerMut,
@@ -10,7 +11,6 @@ use crate::webserver::{FrontendState, MessageFromFrontend};
 use actix::{Actor, Context, Handler, Message};
 use anyhow::{bail, Context as _};
 use crossbeam::atomic::AtomicCell;
-use emg_mouse_shared::ReportFromServer;
 use log::info;
 use rodio::OutputStream;
 use rustfft::FftPlanner;
@@ -35,6 +35,7 @@ enum FollowerId {
 }
 
 pub struct SupervisedServer {
+    server_run_id: u64,
     remote_time_estimator: RemoteTimeEstimator,
     signals: [Signal; 4],
 }
@@ -232,76 +233,79 @@ impl Handler<MessageFromServer> for Supervisor {
             local_time_received,
             report,
         } = message;
-        self.servers[server_index]
-            .remote_time_estimator
-            .observe(report.time_since_start.as_secs_f64(), local_time_received);
+        if self.servers[server_index].server_run_id != report.server_run_id {
+            self.servers[server_index].server_run_id = report.server_run_id;
+            self.servers[server_index].reconnected();
+        }
+        self.servers[server_index].remote_time_estimator.observe(
+            (report.first_sample_index + report.samples.len() as u64 - 1) as f64,
+            local_time_received,
+        );
         self.local_follower.update_most_recent_mouse_move();
         self.update_active_follower();
 
-        let _average = report.inputs.iter().map(|&i| i as f64).mean();
+        for (sample_index_within_report, inputs) in report.samples.iter().enumerate() {
+            let _average = inputs.iter().map(|&i| i as f64).mean();
 
-        let mouse_active_before = self.servers[server_index].signals[2].is_active();
-        for (signal, &input) in self.servers[server_index]
-            .signals
-            .iter_mut()
-            .zip(&report.inputs)
-        {
-            signal.receive_raw(
-                input as f64, /*- average*/
-                report.time_since_start,
-                &mut self.fft_planner,
-            )
-        }
-
-        if self.servers[server_index].signals[2].is_active() != mouse_active_before {
-            if self.servers[server_index].signals[2].is_active() {
-                let move_time = self.active_follower().most_recent_mouse_move();
-                let recently_moved = (Instant::now() - move_time) < Duration::from_millis(50);
-                let anywhere_near_recently_moved =
-                    (Instant::now() - move_time) < Duration::from_millis(10000);
-                if self.enabled && !recently_moved && anywhere_near_recently_moved {
-                    self.active_follower().mousedown();
-                    self.mouse_pressed = true;
-                }
-            } else {
-                if self.mouse_pressed {
-                    assert!(self.enabled);
-                    self.active_follower().mouse_up();
-                    self.mouse_pressed = false;
-                }
+            let mouse_active_before = self.servers[server_index].signals[2].is_active();
+            for (signal, &input) in self.servers[server_index].signals.iter_mut().zip(inputs) {
+                signal.receive_raw(
+                    input as f64, /*- average*/
+                    (report.first_sample_index + sample_index_within_report as u64) as f64 / 1000.0,
+                    &mut self.fft_planner,
+                )
             }
-        }
 
-        if self.enabled
-            && self.servers[server_index].signals[0].is_active()
-                != self.servers[server_index].signals[1].is_active()
-        {
-            fn progress(inputs: usize) -> usize {
-                let s = 400;
-                (inputs * s + inputs * inputs) / (300 * s)
-            }
-            if progress(self.inputs_since_scroll_start + 1)
-                > progress(self.inputs_since_scroll_start)
-            {
-                if self.servers[server_index].signals[0].is_active() {
-                    self.active_follower().scroll_y(1);
+            if self.servers[server_index].signals[2].is_active() != mouse_active_before {
+                if self.servers[server_index].signals[2].is_active() {
+                    let move_time = self.active_follower().most_recent_mouse_move();
+                    let recently_moved = (Instant::now() - move_time) < Duration::from_millis(50);
+                    let anywhere_near_recently_moved =
+                        (Instant::now() - move_time) < Duration::from_millis(10000);
+                    if self.enabled && !recently_moved && anywhere_near_recently_moved {
+                        self.active_follower().mousedown();
+                        self.mouse_pressed = true;
+                    }
                 } else {
-                    self.active_follower().scroll_y(-1);
+                    if self.mouse_pressed {
+                        assert!(self.enabled);
+                        self.active_follower().mouse_up();
+                        self.mouse_pressed = false;
+                    }
                 }
             }
-            self.inputs_since_scroll_start += 1;
-        } else {
-            self.inputs_since_scroll_start = 0;
-        }
 
-        self.update_frontend();
-        self.total_inputs += 1;
-        // println!(
-        //     "{}: {:.2}, {}",
-        //     self.total_inputs,
-        //     self.total_inputs as f64 / report.time_since_start.as_secs_f64(),
-        //     report.time_since_start.as_micros(),
-        // );
+            if self.enabled
+                && self.servers[server_index].signals[0].is_active()
+                    != self.servers[server_index].signals[1].is_active()
+            {
+                fn progress(inputs: usize) -> usize {
+                    let s = 400;
+                    (inputs * s + inputs * inputs) / (300 * s)
+                }
+                if progress(self.inputs_since_scroll_start + 1)
+                    > progress(self.inputs_since_scroll_start)
+                {
+                    if self.servers[server_index].signals[0].is_active() {
+                        self.active_follower().scroll_y(1);
+                    } else {
+                        self.active_follower().scroll_y(-1);
+                    }
+                }
+                self.inputs_since_scroll_start += 1;
+            } else {
+                self.inputs_since_scroll_start = 0;
+            }
+
+            self.update_frontend();
+            self.total_inputs += 1;
+            // println!(
+            //     "{}: {:.2}, {}",
+            //     self.total_inputs,
+            //     self.total_inputs as f64 / report.time_since_start.as_secs_f64(),
+            //     report.time_since_start.as_micros(),
+            // );
+        }
     }
 }
 
@@ -335,6 +339,7 @@ impl Supervisor {
             servers: server_addresses
                 .iter()
                 .map(|&_address| SupervisedServer {
+                    server_run_id: 0,
                     remote_time_estimator: RemoteTimeEstimator::default(),
                     signals: Default::default(),
                 })
@@ -352,15 +357,12 @@ impl Supervisor {
             let supervisor = supervisor.clone();
             async move {
                 let mut stream = messages_from_server();
-                while let Some(message) = stream.next().await {
+                while let Some(report) = stream.next().await {
                     let local_time_received = Instant::now();
                     supervisor.do_send(MessageFromServer {
                         server_index: 0,
                         local_time_received,
-                        report: ReportFromServer {
-                            time_since_start: local_time_received - start_time,
-                            inputs: message,
-                        },
+                        report,
                     })
                 }
             }

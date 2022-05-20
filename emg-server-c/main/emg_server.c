@@ -22,6 +22,7 @@
 #include "freertos/event_groups.h"
 #include "freertos/semphr.h"
 #include "esp_system.h"
+#include "esp_random.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "esp_bt.h"
@@ -401,17 +402,17 @@ static void gatts_profile_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_
                     uint16_t descr_value = param->write.value[1]<<8 | param->write.value[0];
                     if (descr_value == 0x0001){
                         ESP_LOGI(GATTS_TABLE_TAG, "notify enable");
-                        uint8_t notify_data[15];
-                        for (int i = 0; i < sizeof(notify_data); ++i)
-                        {
-                            notify_data[i] = i % 0xff;
-                        }
+//                        uint8_t notify_data[15];
+//                        for (int i = 0; i < sizeof(notify_data); ++i)
+//                        {
+//                            notify_data[i] = i % 0xff;
+//                        }
                         //the size of notify_data[] need less than MTU size
                         ghack = gatts_if;
                         hack_conn_id = param->write.conn_id;
                         ghack_ready = true;
-                        esp_ble_gatts_send_indicate(gatts_if, param->write.conn_id, heart_rate_handle_table[IDX_CHAR_VAL_A],
-                                                sizeof(notify_data), notify_data, false);
+//                        esp_ble_gatts_send_indicate(gatts_if, param->write.conn_id, heart_rate_handle_table[IDX_CHAR_VAL_A],
+//                                                sizeof(notify_data), notify_data, false);
                     }else if (descr_value == 0x0002){
                         ESP_LOGI(GATTS_TABLE_TAG, "indicate enable");
                         uint8_t indicate_data[15];
@@ -581,14 +582,21 @@ static void continuous_adc_init(uint16_t adc1_chan_mask, adc_channel_t *channel,
 volatile uint16_t send_buffer[SEND_BUFFER_SIZE];
 const uint16_t SEND_BUFFER_UNUSED = 0xffff;
 
+
 void ble_task(void* arg) {
 
     while (!ghack_ready) {vTaskDelay(1);}
-
-  uint64_t send_buffer_read_pos = 0;
-  uint16_t send_size = 0;
+  uint64_t sample_index = 0;
+  uint32_t send_buffer_read_pos = 0;
   const uint16_t MAX_SEND_SIZE = 62*8;
   uint8_t notify_data[MAX_SEND_SIZE];
+
+  // first 8 bytes are a random id that disambiguates which run of the server
+  esp_fill_random(notify_data, 8);
+
+  uint16_t send_size = 16;
+  // second 8 bytes are the index of the first sample in the notification
+  *((uint64_t*)&notify_data[8]) = sample_index;
   while(1) {
     while (send_size+2 <= MAX_SEND_SIZE) {
       uint16_t average = send_buffer[send_buffer_read_pos];
@@ -606,14 +614,18 @@ void ble_task(void* arg) {
       }
       notify_data[send_size++] = average >> 8;
       notify_data[send_size++] = average & 0xff;
+      if (send_size % 8 == 0) {
+        sample_index += 1;
+      }
     }
 
-    if (send_size > 0) {
+    if (send_size > 16) {
       if (ghack_ready) {
         esp_ble_gatts_send_indicate(ghack, hack_conn_id, heart_rate_handle_table[IDX_CHAR_VAL_A],
                                     send_size, notify_data, false);
       }
-      send_size = 0;
+      send_size = 16;
+      *((uint64_t*)&notify_data[8]) = sample_index;
     }
     vTaskDelay(1);
   }
