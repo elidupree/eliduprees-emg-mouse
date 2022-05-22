@@ -33,6 +33,9 @@
 #include <soc/i2s_reg.h>
 #include <soc/rtc.h>
 
+#include "driver/gpio.h"
+#include "esp_adc_cal.h"
+
 #include "esp_gap_ble_api.h"
 #include "esp_gatts_api.h"
 #include "esp_bt_main.h"
@@ -537,15 +540,20 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
 #define ADC_OUTPUT_TYPE     ADC_DIGI_OUTPUT_FORMAT_TYPE1
 
 static uint16_t adc1_chan_mask = BIT(4) | BIT(5) | BIT(6) | BIT(7);
-static adc_channel_t channel[4] = {ADC1_CHANNEL_4, ADC1_CHANNEL_5, ADC1_CHANNEL_6, ADC1_CHANNEL_7};
+#define CHANNEL_LIST_SIZE   12
+static adc_channel_t channel[CHANNEL_LIST_SIZE] = {
+  ADC1_CHANNEL_4, ADC1_CHANNEL_5, ADC1_CHANNEL_6, ADC1_CHANNEL_7,
+  ADC1_CHANNEL_6, ADC1_CHANNEL_5, ADC1_CHANNEL_4, ADC1_CHANNEL_6,
+  ADC1_CHANNEL_4, ADC1_CHANNEL_7, ADC1_CHANNEL_5, ADC1_CHANNEL_7,
+};
 
 static const char *TAG = "ADC DMA";
 
-static void continuous_adc_init(uint16_t adc1_chan_mask, adc_channel_t *channel, uint8_t channel_num)
+static void continuous_adc_init()
 {
     adc_digi_init_config_t adc_dma_config = {
         .max_store_buf_size = 110024,
-        .conv_num_each_intr = 8, //TIMES,
+        .conv_num_each_intr = CHANNEL_LIST_SIZE*2, //TIMES,
         .adc1_chan_mask = adc1_chan_mask,
         .adc2_chan_mask = 0,
     };
@@ -560,8 +568,8 @@ static void continuous_adc_init(uint16_t adc1_chan_mask, adc_channel_t *channel,
     };
 
     adc_digi_pattern_config_t adc_pattern[SOC_ADC_PATT_LEN_MAX] = {0};
-    dig_cfg.pattern_num = channel_num;
-    for (int i = 0; i < channel_num; i++) {
+    dig_cfg.pattern_num = CHANNEL_LIST_SIZE;
+    for (int i = 0; i < CHANNEL_LIST_SIZE; i++) {
         uint8_t unit = GET_UNIT(channel[i]);
         uint8_t ch = channel[i] & 0x7;
         adc_pattern[i].atten = ADC_ATTEN_DB_11;
@@ -648,8 +656,96 @@ void adc_task(void * arg) {
     uint32_t reports_per_send = 6;
 
 
-    const int64_t start_time = esp_timer_get_time();
     uint64_t send_buffer_write_pos = 0;
+
+    const adc_atten_t atten = ADC_ATTEN_DB_11;
+    adc1_config_width(ADC_WIDTH_BIT_12);
+    adc1_config_channel_atten(ADC_CHANNEL_4, atten);
+    adc1_config_channel_atten(ADC_CHANNEL_5, atten);
+    adc1_config_channel_atten(ADC_CHANNEL_6, atten);
+    adc1_config_channel_atten(ADC_CHANNEL_7, atten);
+
+    //Characterize ADC
+    esp_adc_cal_characteristics_t *adc_chars;
+    adc_chars = calloc(1, sizeof(esp_adc_cal_characteristics_t));
+    esp_adc_cal_characterize(ADC_UNIT_1, atten, ADC_WIDTH_BIT_12, 1100, adc_chars);
+
+    //Continuously sample ADC1
+//        vTaskDelay(100);
+//    int64_t worst_duration = 0;
+    const adc_channel_t adc_channels[4] = {ADC_CHANNEL_4, ADC_CHANNEL_5, ADC_CHANNEL_6, ADC_CHANNEL_7};
+    const int64_t start_time = esp_timer_get_time();
+    int vals[10] = {0,0,0,0,0,0,0,0,0,0};
+    for(uint64_t sample_index = 0; ; sample_index++) {
+        for(uint32_t adc_index = 0; adc_index < 4; adc_index++) {
+          uint32_t total = 0;
+          uint32_t count = 0;
+          int64_t start_us = start_time + sample_index * 1000 + adc_index * 250;
+          int64_t stop_us = start_us + 200;
+          adc_channel_t channel = adc_channels[adc_index];
+          while (esp_timer_get_time() < start_us){}
+
+          // with just `while (esp_timer_get_time() < stop_us)`, this usually does 4 samples,
+          // but about 12% of the time, does 5 samples; force "<= 4" for consistency.
+          // we still want to be able to stop early to allow catch-up
+          // (which almost-never happens, although it will happen if you stick in logging code);
+          // but always force at least one sample so that we don't have to worry about what to do about divide-by-0
+          do {
+            total += adc1_get_raw(channel);
+            count += 1;
+          } while (count < 4 && esp_timer_get_time() < stop_us);
+          if (count < 10) {
+            vals[count] += 1;
+          }
+
+          uint16_t average = total / count;
+          uint32_t voltage = esp_adc_cal_raw_to_voltage(average, adc_chars);
+          send_buffer[send_buffer_write_pos++] = voltage;
+          if (send_buffer_write_pos >= SEND_BUFFER_SIZE) {
+            send_buffer_write_pos = 0;
+          }
+        }
+        if ((sample_index % 1000) == 999) {
+          printf("counts: ");
+          for(uint32_t i = 0; i < 10; i++) {
+            printf("%d, ", vals[i]);
+          }
+          printf("\n");
+        }
+//
+//        uint32_t adc_reading = 0;
+//        //Multisampling
+//        const int64_t before_read = esp_timer_get_time();
+//        for (int i = 0; i < 1000/12; ++i) {
+//          adc_reading =
+//          adc_reading = adc1_get_raw(ADC_CHANNEL_5);
+//          adc_reading = adc1_get_raw(ADC_CHANNEL_6);
+//          adc_reading = adc1_get_raw(ADC_CHANNEL_7);
+//          adc_reading = adc1_get_raw(ADC_CHANNEL_6);
+//          adc_reading = adc1_get_raw(ADC_CHANNEL_5);
+//          adc_reading = adc1_get_raw(ADC_CHANNEL_4);
+//          adc_reading = adc1_get_raw(ADC_CHANNEL_6);
+//          adc_reading = adc1_get_raw(ADC_CHANNEL_4);
+//          adc_reading = adc1_get_raw(ADC_CHANNEL_7);
+//          adc_reading = adc1_get_raw(ADC_CHANNEL_5);
+//          adc_reading = adc1_get_raw(ADC_CHANNEL_7);
+//        }
+//        const int64_t after_read = esp_timer_get_time();
+//        //Convert adc_reading to voltage in mV
+//        int64_t duration = after_read - before_read;
+//        //if (duration > worst_duration) {
+//        //  worst_duration = duration;
+//          printf("duration: %lld\n", duration);
+//
+//        //}
+//        //uint32_t voltage = esp_adc_cal_raw_to_voltage(adc_reading, adc_chars);
+//        //printf("Raw: %d\tVoltage: %dmV\n", adc_reading, voltage);
+//        vTaskDelay(100);
+//        const int64_t after_delay = esp_timer_get_time();
+//        int64_t dduration = after_delay - after_read;
+//          printf("delay duration: %lld\n", dduration);
+    }
+
     while(1) {
         ret = adc_digi_read_bytes(result, TIMES, &ret_num, ADC_MAX_DELAY);
         if (ret == ESP_OK || ret == ESP_ERR_INVALID_STATE) {
@@ -657,7 +753,7 @@ void adc_task(void * arg) {
 //                adc_digi_stop();
 //                ret = adc_digi_deinitialize();
 //                assert(ret == ESP_OK);
-//                continuous_adc_init(adc1_chan_mask, channel, sizeof(channel) / sizeof(adc_channel_t));
+//                continuous_adc_init();
 //                adc_digi_start();
             }
 
@@ -672,7 +768,7 @@ void adc_task(void * arg) {
               adc_digi_output_data_t *p = (void*)&result[i];
               totals[p->type1.channel - 4] += p->type1.data;
               totals_contributors++;
-              if (totals_contributors == samples_per_report*4) {
+              if (totals_contributors == samples_per_report*CHANNEL_LIST_SIZE) {
                 for (int j = 0; j < 4; j++) {
                   uint16_t average = totals[j] / samples_per_report;
                   send_buffer[send_buffer_write_pos++] = average;
@@ -786,10 +882,10 @@ void app_main(void)
 //      if ((j % 100) == 0) {vTaskDelay(1);}
 //    }
 
-    continuous_adc_init(adc1_chan_mask, channel, sizeof(channel) / sizeof(adc_channel_t));
+    //continuous_adc_init();
 //    int d=8e7/(I2S0.clkm_conf.clkm_div_num+I2S0.clkm_conf.clkm_div_b/I2S0.clkm_conf.clkm_div_a)/2000+0.5;
 //    SET_PERI_REG_BITS(I2S_SAMPLE_RATE_CONF_REG(0), I2S_RX_BCK_DIV_NUM, d, I2S_RX_BCK_DIV_NUM_S);
-    adc_digi_start();
+    //adc_digi_start();
 
     for (uint16_t i = 0; i < SEND_BUFFER_SIZE; ++i) {
       send_buffer[i] = SEND_BUFFER_UNUSED;
