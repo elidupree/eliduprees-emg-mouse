@@ -1,11 +1,14 @@
 use crate::webserver::HistoryFrame;
 use itertools::Itertools;
 use ordered_float::OrderedFloat;
-use rustfft::num_complex::Complex;
-use rustfft::FftPlanner;
+// use rustfft::num_complex::Complex;
+// use rustfft::FftPlanner;
+use num_complex::Complex;
 use statrs::statistics::Statistics;
 use std::collections::VecDeque;
-use std::time::Duration;
+use std::f64::consts::TAU;
+use std::ops::{AddAssign, Div, SubAssign};
+//use std::time::Duration;
 
 // struct Signals {
 //     signals: Vec<Signal>,
@@ -17,10 +20,101 @@ pub enum ActiveState {
 }
 
 #[derive(Default)]
+pub struct Window<T, const SIZE: usize> {
+    num_values_seen: u64,
+    values: VecDeque<T>,
+    cached_sum: T,
+    next_sum: T,
+}
+
+impl<T: Default + Copy + AddAssign + SubAssign, const SIZE: usize> Window<T, SIZE> {
+    pub fn push(&mut self, value: T) {
+        self.num_values_seen += 1;
+        if self.values.len() >= SIZE {
+            self.cached_sum -= self.values.pop_front().unwrap();
+        }
+        self.values.push_back(value);
+        self.cached_sum += value;
+        self.next_sum += value;
+        if self.num_values_seen % SIZE as u64 == 0 {
+            self.cached_sum = self.next_sum;
+            self.next_sum = T::default();
+        }
+    }
+    pub fn sum(&self) -> T {
+        self.cached_sum
+    }
+    pub fn values(&self) -> impl Iterator<Item = &T> + '_ {
+        self.values.iter()
+    }
+    pub fn last(&self) -> Option<T> {
+        self.values.back().copied()
+    }
+    pub fn is_full(&self) -> bool {
+        self.values.len() == SIZE
+    }
+}
+
+impl<T: Copy + Div<f64>, const SIZE: usize> Window<T, SIZE> {
+    pub fn mean(&self) -> T::Output {
+        self.cached_sum / self.values.len() as f64
+    }
+}
+
+const FFT_WINDOW: usize = 50;
+const FFT_HISTORY_SIZE: usize = 3000;
+#[derive(Default)]
+pub struct SingleFrequencyState {
+    frequency: f64,
+
+    raw_signal_values: Window<f64, FFT_WINDOW>,
+    directions: Window<Complex<f64>, FFT_WINDOW>,
+    nudft_summands: Window<Complex<f64>, FFT_WINDOW>,
+
+    corrected_nudft_norms: Window<f64, FFT_HISTORY_SIZE>,
+    // for the running stddev:
+    corrected_nudft_norm_squares: Window<f64, FFT_HISTORY_SIZE>,
+
+    activity_threshold: f64,
+}
+
+impl SingleFrequencyState {
+    pub fn observe_raw_signal_value(&mut self, raw_signal_value: f64, time: f64) {
+        let direction = Complex::cis(time * TAU * self.frequency);
+        self.raw_signal_values.push(raw_signal_value);
+        self.directions.push(direction);
+        self.nudft_summands.push(direction * raw_signal_value);
+
+        let corrected_nudft =
+            self.nudft_summands.mean() - self.raw_signal_values.mean() * self.directions.mean();
+        let corrected_nudft_norm = corrected_nudft.norm();
+
+        self.corrected_nudft_norms.push(corrected_nudft_norm);
+        self.corrected_nudft_norm_squares
+            .push(corrected_nudft_norm.powi(2));
+    }
+
+    pub fn corrected_nudft_norm_stddev(&self) -> f64 {
+        return (self.corrected_nudft_norm_squares.mean()
+            - self.corrected_nudft_norms.mean().powi(2))
+        .sqrt();
+    }
+
+    pub fn latest_activity_level(&self) -> f64 {
+        f64::max(
+            0.0,
+            (self.corrected_nudft_norms.last().unwrap() - self.activity_threshold)
+                / self.corrected_nudft_norm_stddev(),
+        )
+    }
+}
+
+#[derive(Default)]
 pub struct Signal {
     pub total_inputs: usize,
     pub recent_raw_inputs: VecDeque<f64>,
     pub history: VecDeque<HistoryFrame>,
+    pub frequency_states: Vec<SingleFrequencyState>,
     pub frequencies_history: VecDeque<Vec<f64>>,
     pub active_state: ActiveState,
 }
@@ -39,32 +133,51 @@ impl Signal {
     pub fn is_active(&self) -> bool {
         matches!(self.active_state, ActiveState::Active { .. })
     }
-    pub fn receive_raw(&mut self, raw_value: f64, time: f64, fft_planner: &mut FftPlanner<f64>) {
+    pub fn receive_raw(&mut self, raw_value: f64, time: f64) {
         self.total_inputs += 1;
         self.recent_raw_inputs.push_back(raw_value / 1500.0);
         if self.recent_raw_inputs.len() > 1000 {
             self.recent_raw_inputs.pop_front();
         }
 
-        const FFT_WINDOW: usize = 50;
+        if self.frequency_states.is_empty() {
+            self.frequency_states = (1..FFT_WINDOW)
+                .map(|f| f as f64 / (FFT_WINDOW as f64 / 1000.0))
+                .map(|f| SingleFrequencyState {
+                    frequency: f,
+                    ..Default::default()
+                })
+                .collect();
+        }
+        for state in &mut self.frequency_states {
+            state.observe_raw_signal_value(raw_value / 1500.0, time);
+        }
+        let values: Vec<f64> = self
+            .frequency_states
+            .iter()
+            .map(|state| state.corrected_nudft_norms.last().unwrap())
+            .collect();
+
         const FRAMES_PER_FFT: usize = 10;
         if self.recent_raw_inputs.len() >= FFT_WINDOW && self.total_inputs % FRAMES_PER_FFT == 0 {
-            let fft = fft_planner.plan_fft_forward(FFT_WINDOW);
-
-            let mut buffer: Vec<_> = self
-                .recent_raw_inputs
-                .iter()
-                .rev()
-                .take(FFT_WINDOW)
-                .map(|&re| Complex { re, im: 0.0 })
-                .collect();
-            fft.process(&mut buffer);
-            let values: Vec<f64> = buffer.into_iter().skip(1).map(|c| c.norm()).collect();
-            // let scale = 1.0 / values.iter().max_by_key(|&&f| OrderedFloat(f)).unwrap();
+            // let fft = fft_planner.plan_fft_forward(FFT_WINDOW);
+            //
+            // let mut buffer: Vec<_> = self
+            //     .recent_raw_inputs
+            //     .iter()
+            //     .rev()
+            //     .take(FFT_WINDOW)
+            //     .map(|&re| Complex { re, im: 0.0 })
+            //     .collect();
+            // fft.process(&mut buffer);
+            // let values: Vec<f64> = buffer.into_iter().skip(1).map(|c| c.norm()).collect();
+            //let scale = 1.0 / values.iter().max_by_key(|&&f| OrderedFloat(f)).unwrap();
+            let scale = 50.0;
             // for value in &mut values {
             //     *value *= scale;
             // }
-            self.frequencies_history.push_back(values);
+            self.frequencies_history
+                .push_back(values.iter().map(|v| v * scale).collect());
             if self.frequencies_history.len() > 800 / FRAMES_PER_FFT {
                 self.frequencies_history.pop_front();
             }
@@ -72,16 +185,16 @@ impl Signal {
 
         const VALUE_WINDOW: usize = 50;
         if self.recent_raw_inputs.len() >= VALUE_WINDOW {
-            let fft = fft_planner.plan_fft_forward(VALUE_WINDOW);
-            let mut buffer: Vec<_> = self
-                .recent_raw_inputs
-                .iter()
-                .rev()
-                .take(VALUE_WINDOW)
-                .map(|&re| Complex { re, im: 0.0 })
-                .collect();
-            fft.process(&mut buffer);
-            let values: Vec<f64> = buffer.into_iter().skip(1).map(|c| c.norm_sqr()).collect();
+            // let fft = fft_planner.plan_fft_forward(VALUE_WINDOW);
+            // let mut buffer: Vec<_> = self
+            //     .recent_raw_inputs
+            //     .iter()
+            //     .rev()
+            //     .take(VALUE_WINDOW)
+            //     .map(|&re| Complex { re, im: 0.0 })
+            //     .collect();
+            // fft.process(&mut buffer);
+            // let values: Vec<f64> = buffer.into_iter().skip(1).map(|c| c.norm_sqr()).collect();
             let musc = values[4..=5]
                 .iter()
                 .chain(&values[7..=8])

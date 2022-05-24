@@ -13,7 +13,7 @@ use anyhow::{bail, Context as _};
 use crossbeam::atomic::AtomicCell;
 use log::info;
 use rodio::OutputStream;
-use rustfft::FftPlanner;
+//use rustfft::FftPlanner;
 use statrs::statistics::Statistics;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -55,8 +55,7 @@ pub struct Supervisor {
     enabled: bool,
     mouse_pressed: bool,
     inputs_since_scroll_start: usize,
-
-    fft_planner: FftPlanner<f64>,
+    //fft_planner: FftPlanner<f64>,
 }
 
 impl Actor for Supervisor {
@@ -252,7 +251,7 @@ impl Handler<MessageFromServer> for Supervisor {
                 signal.receive_raw(
                     input as f64, /*- average*/
                     (report.first_sample_index + sample_index_within_report as u64) as f64 / 1000.0,
-                    &mut self.fft_planner,
+                    //&mut self.fft_planner,
                 )
             }
 
@@ -348,7 +347,7 @@ impl Supervisor {
             enabled: false,
             mouse_pressed: false,
 
-            fft_planner: FftPlanner::new(),
+            //fft_planner: FftPlanner::new(),
             inputs_since_scroll_start: 0,
         }
         .start();
