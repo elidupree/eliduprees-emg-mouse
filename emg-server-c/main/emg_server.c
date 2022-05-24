@@ -530,60 +530,60 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
         }
     } while (0);
 }
-
-#define TIMES              256
-#define GET_UNIT(x)        ((x>>3) & 0x1)
-
-#define ADC_RESULT_BYTE     2
-#define ADC_CONV_LIMIT_EN   1                       //For ESP32, this should always be set to 1
-#define ADC_CONV_MODE       ADC_CONV_SINGLE_UNIT_1  //ESP32 only supports ADC1 DMA mode
-#define ADC_OUTPUT_TYPE     ADC_DIGI_OUTPUT_FORMAT_TYPE1
-
-static uint16_t adc1_chan_mask = BIT(4) | BIT(5) | BIT(6) | BIT(7);
-#define CHANNEL_LIST_SIZE   12
-static adc_channel_t channel[CHANNEL_LIST_SIZE] = {
-  ADC1_CHANNEL_4, ADC1_CHANNEL_5, ADC1_CHANNEL_6, ADC1_CHANNEL_7,
-  ADC1_CHANNEL_6, ADC1_CHANNEL_5, ADC1_CHANNEL_4, ADC1_CHANNEL_6,
-  ADC1_CHANNEL_4, ADC1_CHANNEL_7, ADC1_CHANNEL_5, ADC1_CHANNEL_7,
-};
-
-static const char *TAG = "ADC DMA";
-
-static void continuous_adc_init()
-{
-    adc_digi_init_config_t adc_dma_config = {
-        .max_store_buf_size = 110024,
-        .conv_num_each_intr = CHANNEL_LIST_SIZE*2, //TIMES,
-        .adc1_chan_mask = adc1_chan_mask,
-        .adc2_chan_mask = 0,
-    };
-    ESP_ERROR_CHECK(adc_digi_initialize(&adc_dma_config));
-
-    adc_digi_configuration_t dig_cfg = {
-        .conv_limit_en = ADC_CONV_LIMIT_EN,
-        .conv_limit_num = 4,//255,
-        .sample_freq_hz = 2 * 1000,
-        .conv_mode = ADC_CONV_MODE,
-        .format = ADC_OUTPUT_TYPE,
-    };
-
-    adc_digi_pattern_config_t adc_pattern[SOC_ADC_PATT_LEN_MAX] = {0};
-    dig_cfg.pattern_num = CHANNEL_LIST_SIZE;
-    for (int i = 0; i < CHANNEL_LIST_SIZE; i++) {
-        uint8_t unit = GET_UNIT(channel[i]);
-        uint8_t ch = channel[i] & 0x7;
-        adc_pattern[i].atten = ADC_ATTEN_DB_11;
-        adc_pattern[i].channel = ch;
-        adc_pattern[i].unit = unit;
-        adc_pattern[i].bit_width = SOC_ADC_DIGI_MAX_BITWIDTH;
-
-        ESP_LOGI(TAG, "adc_pattern[%d].atten is :%x", i, adc_pattern[i].atten);
-        ESP_LOGI(TAG, "adc_pattern[%d].channel is :%x", i, adc_pattern[i].channel);
-        ESP_LOGI(TAG, "adc_pattern[%d].unit is :%x", i, adc_pattern[i].unit);
-    }
-    dig_cfg.adc_pattern = adc_pattern;
-    ESP_ERROR_CHECK(adc_digi_controller_configure(&dig_cfg));
-}
+//
+//#define TIMES              256
+//#define GET_UNIT(x)        ((x>>3) & 0x1)
+//
+//#define ADC_RESULT_BYTE     2
+//#define ADC_CONV_LIMIT_EN   1                       //For ESP32, this should always be set to 1
+//#define ADC_CONV_MODE       ADC_CONV_SINGLE_UNIT_1  //ESP32 only supports ADC1 DMA mode
+//#define ADC_OUTPUT_TYPE     ADC_DIGI_OUTPUT_FORMAT_TYPE1
+//
+//static uint16_t adc1_chan_mask = BIT(4) | BIT(5) | BIT(6) | BIT(7);
+//#define CHANNEL_LIST_SIZE   12
+//static adc_channel_t channel[CHANNEL_LIST_SIZE] = {
+//  ADC1_CHANNEL_4, ADC1_CHANNEL_5, ADC1_CHANNEL_6, ADC1_CHANNEL_7,
+//  ADC1_CHANNEL_6, ADC1_CHANNEL_5, ADC1_CHANNEL_4, ADC1_CHANNEL_6,
+//  ADC1_CHANNEL_4, ADC1_CHANNEL_7, ADC1_CHANNEL_5, ADC1_CHANNEL_7,
+//};
+//
+//static const char *TAG = "ADC DMA";
+//
+//static void continuous_adc_init()
+//{
+//    adc_digi_init_config_t adc_dma_config = {
+//        .max_store_buf_size = 110024,
+//        .conv_num_each_intr = CHANNEL_LIST_SIZE*2, //TIMES,
+//        .adc1_chan_mask = adc1_chan_mask,
+//        .adc2_chan_mask = 0,
+//    };
+//    ESP_ERROR_CHECK(adc_digi_initialize(&adc_dma_config));
+//
+//    adc_digi_configuration_t dig_cfg = {
+//        .conv_limit_en = ADC_CONV_LIMIT_EN,
+//        .conv_limit_num = 4,//255,
+//        .sample_freq_hz = 2 * 1000,
+//        .conv_mode = ADC_CONV_MODE,
+//        .format = ADC_OUTPUT_TYPE,
+//    };
+//
+//    adc_digi_pattern_config_t adc_pattern[SOC_ADC_PATT_LEN_MAX] = {0};
+//    dig_cfg.pattern_num = CHANNEL_LIST_SIZE;
+//    for (int i = 0; i < CHANNEL_LIST_SIZE; i++) {
+//        uint8_t unit = GET_UNIT(channel[i]);
+//        uint8_t ch = channel[i] & 0x7;
+//        adc_pattern[i].atten = ADC_ATTEN_DB_11;
+//        adc_pattern[i].channel = ch;
+//        adc_pattern[i].unit = unit;
+//        adc_pattern[i].bit_width = SOC_ADC_DIGI_MAX_BITWIDTH;
+//
+//        ESP_LOGI(TAG, "adc_pattern[%d].atten is :%x", i, adc_pattern[i].atten);
+//        ESP_LOGI(TAG, "adc_pattern[%d].channel is :%x", i, adc_pattern[i].channel);
+//        ESP_LOGI(TAG, "adc_pattern[%d].unit is :%x", i, adc_pattern[i].unit);
+//    }
+//    dig_cfg.adc_pattern = adc_pattern;
+//    ESP_ERROR_CHECK(adc_digi_controller_configure(&dig_cfg));
+//}
 
 
 #define SEND_BUFFER_SIZE 1024
@@ -641,29 +641,29 @@ void ble_task(void* arg) {
 
 void adc_task(void * arg) {
 
-    esp_err_t ret;
+//    esp_err_t ret;
 
-    uint32_t ret_num = 0;
-    uint8_t result[TIMES] = {0};
-    uint32_t n = 0;
-    uint64_t total = 0;
-    memset(result, 0xcc, TIMES);
+//    uint32_t ret_num = 0;
+//    uint8_t result[TIMES] = {0};
+//    uint32_t n = 0;
+//    uint64_t total = 0;
+//    memset(result, 0xcc, TIMES);
 
-    uint32_t totals[4] = {0,0,0,0};
-    uint32_t totals_contributors = 0;
-    uint32_t samples_per_report = 100;
-    uint32_t report_num = 0;
-    uint32_t reports_per_send = 6;
+//    uint32_t totals[4] = {0,0,0,0};
+//    uint32_t totals_contributors = 0;
+//    uint32_t samples_per_report = 100;
+//    uint32_t report_num = 0;
+//    uint32_t reports_per_send = 6;
 
 
     uint64_t send_buffer_write_pos = 0;
 
     const adc_atten_t atten = ADC_ATTEN_DB_11;
     adc1_config_width(ADC_WIDTH_BIT_12);
-    adc1_config_channel_atten(ADC_CHANNEL_4, atten);
-    adc1_config_channel_atten(ADC_CHANNEL_5, atten);
-    adc1_config_channel_atten(ADC_CHANNEL_6, atten);
-    adc1_config_channel_atten(ADC_CHANNEL_7, atten);
+    const adc_channel_t adc_channels[4] = {ADC_CHANNEL_4, ADC_CHANNEL_5, ADC_CHANNEL_6, ADC_CHANNEL_7};
+    for(uint32_t adc_index = 0; adc_index < 4; adc_index++) {
+      adc1_config_channel_atten(adc_channels[adc_index], atten);
+    }
 
     //Characterize ADC
     esp_adc_cal_characteristics_t *adc_chars;
@@ -673,9 +673,8 @@ void adc_task(void * arg) {
     //Continuously sample ADC1
 //        vTaskDelay(100);
 //    int64_t worst_duration = 0;
-    const adc_channel_t adc_channels[4] = {ADC_CHANNEL_4, ADC_CHANNEL_5, ADC_CHANNEL_6, ADC_CHANNEL_7};
     const int64_t start_time = esp_timer_get_time();
-    int vals[10] = {0,0,0,0,0,0,0,0,0,0};
+//    int vals[10] = {0,0,0,0,0,0,0,0,0,0};
     for(uint64_t sample_index = 0; ; sample_index++) {
         for(uint32_t adc_index = 0; adc_index < 4; adc_index++) {
           uint32_t total = 0;
@@ -694,9 +693,9 @@ void adc_task(void * arg) {
             total += adc1_get_raw(channel);
             count += 1;
           } while (count < 4 && esp_timer_get_time() < stop_us);
-          if (count < 10) {
-            vals[count] += 1;
-          }
+//          if (count < 10) {
+//            vals[count] += 1;
+//          }
 
           uint16_t average = total / count;
           uint32_t voltage = esp_adc_cal_raw_to_voltage(average, adc_chars);
@@ -705,13 +704,13 @@ void adc_task(void * arg) {
             send_buffer_write_pos = 0;
           }
         }
-        if ((sample_index % 1000) == 999) {
-          printf("counts: ");
-          for(uint32_t i = 0; i < 10; i++) {
-            printf("%d, ", vals[i]);
-          }
-          printf("\n");
-        }
+//        if ((sample_index % 1000) == 999) {
+//          printf("counts: ");
+//          for(uint32_t i = 0; i < 10; i++) {
+//            printf("%d, ", vals[i]);
+//          }
+//          printf("\n");
+//        }
 //
 //        uint32_t adc_reading = 0;
 //        //Multisampling
@@ -746,64 +745,64 @@ void adc_task(void * arg) {
 //          printf("delay duration: %lld\n", dduration);
     }
 
-    while(1) {
-        ret = adc_digi_read_bytes(result, TIMES, &ret_num, ADC_MAX_DELAY);
-        if (ret == ESP_OK || ret == ESP_ERR_INVALID_STATE) {
-            if (ret == ESP_ERR_INVALID_STATE) {
-//                adc_digi_stop();
-//                ret = adc_digi_deinitialize();
-//                assert(ret == ESP_OK);
-//                continuous_adc_init();
-//                adc_digi_start();
-            }
-
-            n += 1;
-            total += ret_num;
-
-            if (n % 10000 == 0) {
-              ESP_LOGI("TASK:", "ret is %x, ret_num is %d, total is %llu, avg is %lld/s", ret, ret_num, total, total*1000000/(esp_timer_get_time() - start_time));
-            }
-
-            for (int i = 0; i < ret_num; i += ADC_RESULT_BYTE) {
-              adc_digi_output_data_t *p = (void*)&result[i];
-              totals[p->type1.channel - 4] += p->type1.data;
-              totals_contributors++;
-              if (totals_contributors == samples_per_report*CHANNEL_LIST_SIZE) {
-                for (int j = 0; j < 4; j++) {
-                  uint16_t average = totals[j] / samples_per_report;
-                  send_buffer[send_buffer_write_pos++] = average;
-                  if (send_buffer_write_pos >= SEND_BUFFER_SIZE) {
-                    send_buffer_write_pos = 0;
-                  }
-//                  notify_data[(report_num % reports_per_send)*8 + j*2] = average >> 4;
-//                  notify_data[(report_num % reports_per_send)*8 + j*2 + 1] = average & 0xff;
-                  totals[j] = 0;
-                }
-                totals_contributors = 0;
-//                report_num++;
-                if (report_num % reports_per_send == 0) {
-//                  esp_ble_gatts_send_indicate(ghack, hack_conn_id, heart_rate_handle_table[IDX_CHAR_VAL_A],
-//                                                reports_per_send*8, notify_data, false);
-                }
-              }
-            }
-
-            //See `note 1`
-            if (ret_num < TIMES) vTaskDelay(1);
-        } else if (ret == ESP_ERR_TIMEOUT) {
-            /**
-             * ``ESP_ERR_TIMEOUT``: If ADC conversion is not finished until Timeout, you'll get this return error.
-             * Here we set Timeout ``portMAX_DELAY``, so you'll never reach this branch.
-             */
-            ESP_LOGW(TAG, "No data, increase timeout or reduce conv_num_each_intr");
-            vTaskDelay(1000);
-        }
-
-    }
-
-    adc_digi_stop();
-    ret = adc_digi_deinitialize();
-    assert(ret == ESP_OK);
+//    while(1) {
+//        ret = adc_digi_read_bytes(result, TIMES, &ret_num, ADC_MAX_DELAY);
+//        if (ret == ESP_OK || ret == ESP_ERR_INVALID_STATE) {
+//            if (ret == ESP_ERR_INVALID_STATE) {
+////                adc_digi_stop();
+////                ret = adc_digi_deinitialize();
+////                assert(ret == ESP_OK);
+////                continuous_adc_init();
+////                adc_digi_start();
+//            }
+//
+//            n += 1;
+//            total += ret_num;
+//
+//            if (n % 10000 == 0) {
+//              ESP_LOGI("TASK:", "ret is %x, ret_num is %d, total is %llu, avg is %lld/s", ret, ret_num, total, total*1000000/(esp_timer_get_time() - start_time));
+//            }
+//
+//            for (int i = 0; i < ret_num; i += ADC_RESULT_BYTE) {
+//              adc_digi_output_data_t *p = (void*)&result[i];
+//              totals[p->type1.channel - 4] += p->type1.data;
+//              totals_contributors++;
+//              if (totals_contributors == samples_per_report*CHANNEL_LIST_SIZE) {
+//                for (int j = 0; j < 4; j++) {
+//                  uint16_t average = totals[j] / samples_per_report;
+//                  send_buffer[send_buffer_write_pos++] = average;
+//                  if (send_buffer_write_pos >= SEND_BUFFER_SIZE) {
+//                    send_buffer_write_pos = 0;
+//                  }
+////                  notify_data[(report_num % reports_per_send)*8 + j*2] = average >> 4;
+////                  notify_data[(report_num % reports_per_send)*8 + j*2 + 1] = average & 0xff;
+//                  totals[j] = 0;
+//                }
+//                totals_contributors = 0;
+////                report_num++;
+//                if (report_num % reports_per_send == 0) {
+////                  esp_ble_gatts_send_indicate(ghack, hack_conn_id, heart_rate_handle_table[IDX_CHAR_VAL_A],
+////                                                reports_per_send*8, notify_data, false);
+//                }
+//              }
+//            }
+//
+//            //See `note 1`
+//            if (ret_num < TIMES) vTaskDelay(1);
+//        } else if (ret == ESP_ERR_TIMEOUT) {
+//            /**
+//             * ``ESP_ERR_TIMEOUT``: If ADC conversion is not finished until Timeout, you'll get this return error.
+//             * Here we set Timeout ``portMAX_DELAY``, so you'll never reach this branch.
+//             */
+//            ESP_LOGW(TAG, "No data, increase timeout or reduce conv_num_each_intr");
+//            vTaskDelay(1000);
+//        }
+//
+//    }
+//
+//    adc_digi_stop();
+//    ret = adc_digi_deinitialize();
+//    assert(ret == ESP_OK);
 }
 
 
