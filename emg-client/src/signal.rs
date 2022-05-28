@@ -3,6 +3,7 @@ use itertools::Itertools;
 use ordered_float::OrderedFloat;
 // use rustfft::num_complex::Complex;
 // use rustfft::FftPlanner;
+use arrayvec::ArrayVec;
 use num_complex::Complex;
 use statrs::statistics::Statistics;
 use std::collections::VecDeque;
@@ -41,18 +42,21 @@ impl<T: Default + Copy + AddAssign + SubAssign, const SIZE: usize> Window<T, SIZ
             self.next_sum = T::default();
         }
     }
-    pub fn sum(&self) -> T {
-        self.cached_sum
-    }
+    // pub fn sum(&self) -> T {
+    //     self.cached_sum
+    // }
     pub fn values(&self) -> impl Iterator<Item = &T> + '_ {
         self.values.iter()
+    }
+    pub fn num_values_seen(&self) -> u64 {
+        self.num_values_seen
     }
     pub fn last(&self) -> Option<T> {
         self.values.back().copied()
     }
-    pub fn is_full(&self) -> bool {
-        self.values.len() == SIZE
-    }
+    // pub fn is_full(&self) -> bool {
+    //     self.values.len() == SIZE
+    // }
 }
 
 impl<T: Copy + Div<f64>, const SIZE: usize> Window<T, SIZE> {
@@ -62,6 +66,8 @@ impl<T: Copy + Div<f64>, const SIZE: usize> Window<T, SIZE> {
 }
 
 const FFT_WINDOW: usize = 50;
+const SIZE_OF_CHUNK_OVER_WHICH_MAXIMUM_IS_TAKEN: usize = 100;
+const NUMBER_OF_CHUNKS_OVER_WHICH_MAXIMA_ARE_TAKEN: usize = 30;
 const FFT_HISTORY_SIZE: usize = 3000;
 #[derive(Default)]
 pub struct SingleFrequencyState {
@@ -73,9 +79,14 @@ pub struct SingleFrequencyState {
 
     corrected_nudft_norms: Window<f64, FFT_HISTORY_SIZE>,
     // for the running stddev:
-    corrected_nudft_norm_squares: Window<f64, FFT_HISTORY_SIZE>,
+    // corrected_nudft_norm_squares: Window<f64, FFT_HISTORY_SIZE>,
+    chunk_maxima: Window<f64, NUMBER_OF_CHUNKS_OVER_WHICH_MAXIMA_ARE_TAKEN>,
+    current_max_across_current_chunk_and_all_saved_chunks: f64,
+    current_stddev_of_top_nonadjacent_chunks: f64,
+    running_max_of_current_chunk: f64,
 
     activity_threshold: f64,
+    activity_increment: f64,
 }
 
 impl SingleFrequencyState {
@@ -90,22 +101,106 @@ impl SingleFrequencyState {
         let corrected_nudft_norm = corrected_nudft.norm();
 
         self.corrected_nudft_norms.push(corrected_nudft_norm);
-        self.corrected_nudft_norm_squares
-            .push(corrected_nudft_norm.powi(2));
+        self.running_max_of_current_chunk =
+            self.running_max_of_current_chunk.max(corrected_nudft_norm);
+        self.current_max_across_current_chunk_and_all_saved_chunks = self
+            .current_max_across_current_chunk_and_all_saved_chunks
+            .max(corrected_nudft_norm);
+        if self.corrected_nudft_norms.num_values_seen()
+            % SIZE_OF_CHUNK_OVER_WHICH_MAXIMUM_IS_TAKEN as u64
+            == 0
+        {
+            self.chunk_maxima.push(self.running_max_of_current_chunk);
+            self.running_max_of_current_chunk = 0.0;
+            let mut top_nonadjacent_maxima: ArrayVec<f64, 5> = ArrayVec::new();
+            let mut maxima: ArrayVec<f64, NUMBER_OF_CHUNKS_OVER_WHICH_MAXIMA_ARE_TAKEN> =
+                self.chunk_maxima.values().copied().collect();
+            while !top_nonadjacent_maxima.is_full() {
+                let (argmax, &max) = maxima
+                    .iter()
+                    .enumerate()
+                    .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
+                    .unwrap();
+                top_nonadjacent_maxima.push(max);
+                maxima.drain(0.max(argmax - 1)..maxima.len().min(argmax + 2));
+            }
+            self.current_max_across_current_chunk_and_all_saved_chunks = top_nonadjacent_maxima[0];
+            self.current_stddev_of_top_nonadjacent_chunks =
+                top_nonadjacent_maxima.into_iter().std_dev();
+            if self.current_max_across_current_chunk_and_all_saved_chunks < self.activity_threshold
+            {
+                // activity_threshold reduction case:
+                // the assumption here is that the ambient noise has gone down,
+                // so we can just overwrite with the exact current value of the stddev over history length
+                self.activity_threshold =
+                    self.current_max_across_current_chunk_and_all_saved_chunks;
+                self.activity_increment = self.current_stddev_of_top_nonadjacent_chunks;
+            }
+        }
+        // self.corrected_nudft_norm_squares
+        //     .push(corrected_nudft_norm.powi(2));
     }
 
-    pub fn corrected_nudft_norm_stddev(&self) -> f64 {
-        return (self.corrected_nudft_norm_squares.mean()
-            - self.corrected_nudft_norms.mean().powi(2))
-        .sqrt();
-    }
+    // pub fn corrected_nudft_norm_stddev(&self) -> f64 {
+    //     return (self.corrected_nudft_norm_squares.mean()
+    //         - self.corrected_nudft_norms.mean().powi(2))
+    //     .sqrt();
+    // }
 
     pub fn latest_activity_level(&self) -> f64 {
         f64::max(
             0.0,
             (self.corrected_nudft_norms.last().unwrap() - self.activity_threshold)
-                / self.corrected_nudft_norm_stddev(),
+                / self.activity_increment,
         )
+    }
+
+    pub fn conflicting_signal_is_active(&mut self, max_activity_level_of_conflicting_signal: f64) {
+        let my_activity_level = self.latest_activity_level();
+        let target_level;
+        if my_activity_level > 1.0 {
+            // we are ACTIVE:
+            // no need to yield to other signals that are MAYBE,
+            // but if another signal is ACTIVE, we want to reduce both until one isn't
+            if max_activity_level_of_conflicting_signal > 1.0 {
+                target_level = f64::max(
+                    0.99,
+                    my_activity_level - (max_activity_level_of_conflicting_signal - 0.99),
+                );
+            } else {
+                return;
+            }
+        } else if my_activity_level > 0.0 {
+            // we are MAYBE:
+            // yield to both ACTIVE and MAYBE signals, but do it incrementally, so that if we are genuinely being activated,
+            // we will outpace the incremental threshold-increase and become ACTIVE
+            target_level = f64::max(0.0, my_activity_level - 1.0 / 250.0);
+        } else {
+            return;
+        }
+
+        // linear combination of current activity rules and new
+        // l=(x - ((1-a)*t0+a*t1))/((1-a)*i0+a*i1)
+        // l*((1-a)*i0+a*i1)=(x - ((1-a)*t0+a*t1))
+        // al(i1-i0) + li0 = a(t0-t1) - t0 + x
+        // a(l(i1-i0) + t1-t0) = x - t0 - li0
+        // a = (x - t0 - li0) / (l(i1-i0) + t1-t0)
+        let x = self.corrected_nudft_norms.last().unwrap();
+        let l = target_level;
+        let t0 = self.activity_threshold;
+        let i0 = self.activity_increment;
+        let t1 = self.current_max_across_current_chunk_and_all_saved_chunks;
+        let i1 = self.current_stddev_of_top_nonadjacent_chunks;
+        let a = (x - t0 - l * i0) / (l * (i1 - i0) + t1 - t0);
+        self.activity_threshold = t0 * (1.0 - a) + t1 * a;
+        self.activity_increment = i0 * (1.0 - a) + i1 * a;
+        let epsilon = 0.0001;
+        assert!(
+            a >= 0.0 - epsilon
+                && a <= 1.0 + epsilon
+                && (self.latest_activity_level() - target_level).abs() < epsilon,
+            "Guess I did the math wrong? x:{x}, l:{l}, t0:{t0}, i0:{i0}, t1:{t1}, i1:{i1}, a:{a}"
+        );
     }
 }
 
@@ -133,6 +228,11 @@ impl Signal {
     pub fn is_active(&self) -> bool {
         matches!(self.active_state, ActiveState::Active { .. })
     }
+    pub fn conflicting_signal_is_active(&mut self, max_activity_level_of_conflicting_signal: f64) {
+        for state in &mut self.frequency_states {
+            state.conflicting_signal_is_active(max_activity_level_of_conflicting_signal);
+        }
+    }
     pub fn receive_raw(&mut self, raw_value: f64, time: f64) {
         self.total_inputs += 1;
         self.recent_raw_inputs.push_back(raw_value / 1500.0);
@@ -143,6 +243,7 @@ impl Signal {
         if self.frequency_states.is_empty() {
             self.frequency_states = (1..FFT_WINDOW)
                 .map(|f| f as f64 / (FFT_WINDOW as f64 / 1000.0))
+                // .map(|f| 500.0 * 0.895_f64.powi(f as i32))
                 .map(|f| SingleFrequencyState {
                     frequency: f,
                     ..Default::default()
