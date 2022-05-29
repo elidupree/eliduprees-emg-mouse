@@ -69,14 +69,14 @@ pub fn messages_from_server() -> impl Stream<Item = ReportFromServer> {
                     let first_sample_index =
                         u64::from_le_bytes((&notification.value[8..16]).try_into().unwrap());
                     let samples = notification.value[16..]
-                        .chunks_exact(8)
+                        .chunks_exact(6)
                         .map(|chunk| {
-                            chunk
-                                .chunks_exact(2)
-                                .map(|p| (u16::from(p[0]) << 8) + u16::from(p[1]))
-                                .collect::<Vec<u16>>()
-                                .try_into()
-                                .unwrap()
+                            [
+                                (u16::from(chunk[0]) << 4) + (u16::from(chunk[4]) >> 4),
+                                (u16::from(chunk[1]) << 4) + (u16::from(chunk[4]) & 15),
+                                (u16::from(chunk[2]) << 4) + (u16::from(chunk[5]) >> 4),
+                                (u16::from(chunk[3]) << 4) + (u16::from(chunk[5]) & 15),
+                            ]
                         })
                         .collect();
                     let report = ReportFromServer {

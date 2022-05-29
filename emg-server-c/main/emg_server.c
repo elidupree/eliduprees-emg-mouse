@@ -596,8 +596,10 @@ void ble_task(void* arg) {
     while (!ghack_ready) {vTaskDelay(1);}
   uint64_t sample_index = 0;
   uint32_t send_buffer_read_pos = 0;
-  const uint16_t MAX_SEND_SIZE = 62*8;
+  const uint16_t MAX_SEND_SIZE = 16 + 82*6;
   uint8_t notify_data[MAX_SEND_SIZE];
+
+  uint16_t latest_samples[4];
 
   // first 8 bytes are a random id that disambiguates which run of the server
   esp_fill_random(notify_data, 8);
@@ -606,7 +608,7 @@ void ble_task(void* arg) {
   // second 8 bytes are the index of the first sample in the notification
   *((uint64_t*)&notify_data[8]) = sample_index;
   while(1) {
-    while (send_size+2 <= MAX_SEND_SIZE) {
+    while (send_size+6 <= MAX_SEND_SIZE) {
       uint16_t average = send_buffer[send_buffer_read_pos];
       if (average == SEND_BUFFER_UNUSED) {
         if (send_size % 8 == 0) {
@@ -616,13 +618,19 @@ void ble_task(void* arg) {
           continue;
         }
       }
+      latest_samples[send_buffer_read_pos % 4] = average;
       send_buffer[send_buffer_read_pos++] = SEND_BUFFER_UNUSED;
       if (send_buffer_read_pos >= SEND_BUFFER_SIZE) {
         send_buffer_read_pos = 0;
       }
-      notify_data[send_size++] = average >> 8;
-      notify_data[send_size++] = average & 0xff;
-      if (send_size % 8 == 0) {
+
+      if (send_buffer_read_pos % 4 == 0) {
+        notify_data[send_size++] = latest_samples[0] >> 4;
+        notify_data[send_size++] = latest_samples[1] >> 4;
+        notify_data[send_size++] = latest_samples[2] >> 4;
+        notify_data[send_size++] = latest_samples[3] >> 4;
+        notify_data[send_size++] = ((latest_samples[0] & 0xf) << 4) + (latest_samples[1] & 0xf);
+        notify_data[send_size++] = ((latest_samples[2] & 0xf) << 4) + (latest_samples[3] & 0xf);
         sample_index += 1;
       }
     }
