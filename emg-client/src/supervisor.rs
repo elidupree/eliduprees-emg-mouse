@@ -14,6 +14,8 @@ use crossbeam::atomic::AtomicCell;
 use log::info;
 use rodio::OutputStream;
 //use rustfft::FftPlanner;
+use arrayvec::ArrayVec;
+use ordered_float::OrderedFloat;
 use statrs::statistics::Statistics;
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -253,6 +255,24 @@ impl Handler<MessageFromServer> for Supervisor {
                     (report.first_sample_index + sample_index_within_report as u64) as f64 / 1000.0,
                     //&mut self.fft_planner,
                 )
+            }
+            let max_activity_levels: ArrayVec<f64, 4> = self.servers[server_index]
+                .signals
+                .iter()
+                .map(Signal::max_activity_level)
+                .collect();
+            for (index, signal) in self.servers[server_index].signals.iter_mut().enumerate() {
+                let max_activity_level_of_conflicting_signal = max_activity_levels
+                    .iter()
+                    .copied()
+                    .enumerate()
+                    .filter(|&(i, _x)| i != index)
+                    .map(|(_i, x)| x)
+                    .max_by_key(|&f| OrderedFloat(f))
+                    .unwrap();
+                if max_activity_level_of_conflicting_signal > 0.0 {
+                    signal.conflicting_signal_is_active(max_activity_level_of_conflicting_signal);
+                }
             }
 
             if self.servers[server_index].signals[2].is_active() != mouse_active_before {

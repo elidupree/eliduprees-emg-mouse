@@ -90,6 +90,14 @@ pub struct SingleFrequencyState {
 }
 
 impl SingleFrequencyState {
+    pub fn new(frequency: f64) -> SingleFrequencyState {
+        SingleFrequencyState {
+            frequency,
+            activity_increment: 0.0000001,
+            current_stddev_of_top_nonadjacent_chunks: 0.0000001,
+            ..Default::default()
+        }
+    }
     pub fn observe_raw_signal_value(&mut self, raw_signal_value: f64, time: f64) {
         let direction = Complex::cis(time * TAU * self.frequency);
         self.raw_signal_values.push(raw_signal_value);
@@ -115,18 +123,18 @@ impl SingleFrequencyState {
             let mut top_nonadjacent_maxima: ArrayVec<f64, 5> = ArrayVec::new();
             let mut maxima: ArrayVec<f64, NUMBER_OF_CHUNKS_OVER_WHICH_MAXIMA_ARE_TAKEN> =
                 self.chunk_maxima.values().copied().collect();
-            while !top_nonadjacent_maxima.is_full() {
+            while !maxima.is_empty() && !top_nonadjacent_maxima.is_full() {
                 let (argmax, &max) = maxima
                     .iter()
                     .enumerate()
                     .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap())
                     .unwrap();
                 top_nonadjacent_maxima.push(max);
-                maxima.drain(0.max(argmax - 1)..maxima.len().min(argmax + 2));
+                maxima.drain(argmax.saturating_sub(1)..maxima.len().min(argmax + 2));
             }
             self.current_max_across_current_chunk_and_all_saved_chunks = top_nonadjacent_maxima[0];
             self.current_stddev_of_top_nonadjacent_chunks =
-                top_nonadjacent_maxima.into_iter().std_dev();
+                top_nonadjacent_maxima.into_iter().std_dev().max(0.0000001);
             if self.current_max_across_current_chunk_and_all_saved_chunks < self.activity_threshold
             {
                 // activity_threshold reduction case:
@@ -148,11 +156,8 @@ impl SingleFrequencyState {
     // }
 
     pub fn latest_activity_level(&self) -> f64 {
-        f64::max(
-            0.0,
-            (self.corrected_nudft_norms.last().unwrap() - self.activity_threshold)
-                / self.activity_increment,
-        )
+        (self.corrected_nudft_norms.last().unwrap() - self.activity_threshold)
+            / self.activity_increment
     }
 
     pub fn conflicting_signal_is_active(&mut self, max_activity_level_of_conflicting_signal: f64) {
@@ -199,7 +204,7 @@ impl SingleFrequencyState {
             a >= 0.0 - epsilon
                 && a <= 1.0 + epsilon
                 && (self.latest_activity_level() - target_level).abs() < epsilon,
-            "Guess I did the math wrong? x:{x}, l:{l}, t0:{t0}, i0:{i0}, t1:{t1}, i1:{i1}, a:{a}"
+            "Guess I did the math wrong? x:{x}, l:{l}, l_new:{q}, t0:{t0}, i0:{i0}, t1:{t1}, i1:{i1}, a:{a}", q = self.latest_activity_level(),
         );
     }
 }
@@ -210,6 +215,7 @@ pub struct Signal {
     pub recent_raw_inputs: VecDeque<f64>,
     pub history: VecDeque<HistoryFrame>,
     pub frequency_states: Vec<SingleFrequencyState>,
+    pub max_activity_level: f64,
     pub frequencies_history: VecDeque<Vec<f64>>,
     pub active_state: ActiveState,
 }
@@ -228,6 +234,9 @@ impl Signal {
     pub fn is_active(&self) -> bool {
         matches!(self.active_state, ActiveState::Active { .. })
     }
+    pub fn max_activity_level(&self) -> f64 {
+        self.max_activity_level
+    }
     pub fn conflicting_signal_is_active(&mut self, max_activity_level_of_conflicting_signal: f64) {
         for state in &mut self.frequency_states {
             state.conflicting_signal_is_active(max_activity_level_of_conflicting_signal);
@@ -244,19 +253,27 @@ impl Signal {
             self.frequency_states = (1..FFT_WINDOW)
                 .map(|f| f as f64 / (FFT_WINDOW as f64 / 1000.0))
                 // .map(|f| 500.0 * 0.895_f64.powi(f as i32))
-                .map(|f| SingleFrequencyState {
-                    frequency: f,
-                    ..Default::default()
-                })
+                .map(|f| SingleFrequencyState::new(f))
                 .collect();
         }
         for state in &mut self.frequency_states {
             state.observe_raw_signal_value(raw_value / 1500.0, time);
         }
+        self.max_activity_level = self
+            .frequency_states
+            .iter()
+            .map(SingleFrequencyState::latest_activity_level)
+            .max_by_key(|&f| OrderedFloat(f))
+            .unwrap();
         let values: Vec<f64> = self
             .frequency_states
             .iter()
             .map(|state| state.corrected_nudft_norms.last().unwrap())
+            .collect();
+        let thresholds: Vec<f64> = self
+            .frequency_states
+            .iter()
+            .map(|state| state.activity_threshold)
             .collect();
 
         const FRAMES_PER_FFT: usize = 10;
@@ -279,7 +296,9 @@ impl Signal {
             // }
             self.frequencies_history
                 .push_back(values.iter().map(|v| v * scale).collect());
-            if self.frequencies_history.len() > 800 / FRAMES_PER_FFT {
+            self.frequencies_history
+                .push_back(thresholds.iter().map(|v| v * scale).collect());
+            while self.frequencies_history.len() > 800 * 2 / FRAMES_PER_FFT {
                 self.frequencies_history.pop_front();
             }
         }
