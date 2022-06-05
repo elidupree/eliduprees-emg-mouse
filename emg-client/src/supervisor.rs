@@ -7,14 +7,15 @@ use crate::follower::{
 use crate::remote_time_estimator::RemoteTimeEstimator;
 use crate::signal::Signal;
 use crate::utils::{DatagramsExt, IncomingUniStreamsExt};
-use crate::webserver::{FrontendState, MessageFromFrontend};
-use actix::{Actor, Context, Handler, Message};
+use crate::webserver::{MessageFromFrontend, MessageToFrontend};
+use actix::{Actor, Addr, Context, Handler, Message};
 use anyhow::{bail, Context as _};
-use crossbeam::atomic::AtomicCell;
 use log::info;
 use rodio::OutputStream;
 //use rustfft::FftPlanner;
+use crate::webserver_glue::FrontendSession;
 use arrayvec::ArrayVec;
+use itertools::multizip;
 use ordered_float::OrderedFloat;
 use statrs::statistics::Statistics;
 use std::collections::HashMap;
@@ -52,7 +53,7 @@ pub struct Supervisor {
 
     servers: Vec<SupervisedServer>,
 
-    frontend_state_updater: Arc<AtomicCell<Option<FrontendState>>>,
+    frontend_session: Option<Addr<FrontendSession>>,
 
     enabled: bool,
     mouse_pressed: bool,
@@ -83,6 +84,12 @@ pub struct ServerReconnected {
 pub struct NewFollower {
     name: String,
     follower: SupervisedFollower<RemoteFollower>,
+}
+
+#[derive(Debug, Message)]
+#[rtype(result = "()")]
+pub struct NewFrontendSession {
+    pub session: Addr<FrontendSession>,
 }
 
 #[derive(Debug, Message)]
@@ -127,45 +134,27 @@ impl Supervisor {
             self.active_follower_id = FollowerId::Local
         }
     }
-    fn update_frontend(&mut self) {
-        let start_time = self.start_time;
-        let latest_time = self.servers[0].signals[0]
-            .history
-            .back()
-            .map_or(0.0, |f| f.time);
-        self.frontend_state_updater.store(Some(FrontendState {
-            enabled: self.enabled,
-            followers: std::iter::once((
-                "Local".to_string(),
-                (self.local_follower.most_recent_mouse_move() - start_time).as_secs_f64(),
-            ))
-            .chain(self.remote_followers.iter_mut().map(|(n, f)| {
-                (
-                    n.clone(),
-                    (f.most_recent_mouse_move() - start_time).as_secs_f64(),
-                )
-            }))
-            .collect(),
-            histories: self
-                .servers
-                .iter()
-                .flat_map(|server| {
-                    server.signals.iter().map(|s| {
-                        s.history
-                            .iter()
-                            .filter(|f| f.time >= latest_time - 0.8)
-                            .cloned()
-                            .collect()
-                    })
-                })
-                .collect(),
-            frequencies_histories: self
-                .servers
-                .iter()
-                .flat_map(|server| server.signals.iter().map(|s| s.frequencies_history.clone()))
-                .collect(),
-        }));
-    }
+    // fn update_frontend(&mut self) {
+    //     let start_time = self.start_time;
+    //     let latest_time = self.servers[0].signals[0]
+    //         .history
+    //         .back()
+    //         .map_or(0.0, |f| f.time);
+    //     self.frontend_session.store(Some(FrontendState {
+    //         enabled: self.enabled,
+    //         followers: std::iter::once((
+    //             "Local".to_string(),
+    //             (self.local_follower.most_recent_mouse_move() - start_time).as_secs_f64(),
+    //         ))
+    //         .chain(self.remote_followers.iter_mut().map(|(n, f)| {
+    //             (
+    //                 n.clone(),
+    //                 (f.most_recent_mouse_move() - start_time).as_secs_f64(),
+    //             )
+    //         }))
+    //         .collect(),
+    //     }));
+    // }
 }
 
 impl Handler<NewFollower> for Supervisor {
@@ -173,6 +162,22 @@ impl Handler<NewFollower> for Supervisor {
 
     fn handle(&mut self, message: NewFollower, _context: &mut Self::Context) -> Self::Result {
         self.remote_followers.insert(message.name, message.follower);
+    }
+}
+
+impl Handler<NewFrontendSession> for Supervisor {
+    type Result = ();
+
+    fn handle(
+        &mut self,
+        message: NewFrontendSession,
+        _context: &mut Self::Context,
+    ) -> Self::Result {
+        message.session.do_send(MessageToFrontend::Initialize {
+            enabled: self.enabled,
+            variables: Default::default(),
+        });
+        self.frontend_session = Some(message.session);
     }
 }
 
@@ -191,7 +196,6 @@ impl Handler<MessageFromFrontend> for Supervisor {
                     self.mouse_pressed = false;
                 }
                 self.enabled = new_enabled;
-                self.update_frontend()
             }
         }
     }
@@ -245,21 +249,31 @@ impl Handler<MessageFromServer> for Supervisor {
         self.local_follower.update_most_recent_mouse_move();
         self.update_active_follower();
 
+        let mut new_history_frames = [const { Vec::new() }; 4];
+        let mut new_frequencies_frames = [const { Vec::new() }; 4];
+
         for (sample_index_within_report, inputs) in report.samples.iter().enumerate() {
             let _average = inputs.iter().map(|&i| i as f64).mean();
 
             let mouse_active_before = self.servers[server_index].signals[2].is_active();
-            for (signal, &input) in self.servers[server_index].signals.iter_mut().zip(inputs) {
+            for (signal, &input, new_history_frames, new_frequencies_frames) in multizip((
+                &mut self.servers[server_index].signals,
+                inputs,
+                &mut new_history_frames,
+                &mut new_frequencies_frames,
+            )) {
                 signal.receive_raw(
                     input as f64, /*- average*/
                     (report.first_sample_index + sample_index_within_report as u64) as f64 / 1000.0,
                     //&mut self.fft_planner,
+                    |f| new_history_frames.push(f),
+                    |f| new_frequencies_frames.push(f),
                 )
             }
             let max_activity_levels: ArrayVec<f64, 4> = self.servers[server_index]
                 .signals
                 .iter()
-                .map(Signal::max_activity_level)
+                .map(Signal::aggregate_activity_level)
                 .collect();
             for (index, signal) in self.servers[server_index].signals.iter_mut().enumerate() {
                 let max_activity_level_of_conflicting_signal = max_activity_levels
@@ -316,7 +330,6 @@ impl Handler<MessageFromServer> for Supervisor {
                 self.inputs_since_scroll_start = 0;
             }
 
-            self.update_frontend();
             self.total_inputs += 1;
             // println!(
             //     "{}: {:.2}, {}",
@@ -324,6 +337,20 @@ impl Handler<MessageFromServer> for Supervisor {
             //     self.total_inputs as f64 / report.time_since_start.as_secs_f64(),
             //     report.time_since_start.as_micros(),
             // );
+        }
+        if let Some(session) = &mut self.frontend_session {
+            if !new_history_frames[0].is_empty() {
+                session.do_send(MessageToFrontend::NewHistoryFrames {
+                    server_index,
+                    frames: new_history_frames,
+                });
+            }
+            if !new_frequencies_frames[0].is_empty() {
+                session.do_send(MessageToFrontend::NewFrequenciesFrames {
+                    server_index,
+                    frames: new_frequencies_frames,
+                });
+            }
         }
     }
 }
@@ -337,8 +364,6 @@ impl Supervisor {
         }: SupervisorOptions,
     ) -> anyhow::Result<()> {
         let start_time = Instant::now();
-        let frontend_state_updater = Arc::new(AtomicCell::new(None));
-
         let server_addresses = [server_address.parse::<SocketAddr>().unwrap()];
 
         let audio_output_stream_handle = {
@@ -363,7 +388,7 @@ impl Supervisor {
                     signals: Default::default(),
                 })
                 .collect(),
-            frontend_state_updater: frontend_state_updater.clone(),
+            frontend_session: None,
             enabled: false,
             mouse_pressed: false,
 
@@ -521,12 +546,6 @@ impl Supervisor {
             }
         });
 
-        crate::webserver_glue::launch(
-            frontend_state_updater,
-            supervisor,
-            PathBuf::from("web_frontend"),
-            gui_port,
-        )
-        .await
+        crate::webserver_glue::launch(supervisor, PathBuf::from("web_frontend"), gui_port).await
     }
 }

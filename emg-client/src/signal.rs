@@ -1,4 +1,4 @@
-use crate::webserver::HistoryFrame;
+use crate::webserver::{FrequenciesFrame, HistoryFrame};
 use itertools::Itertools;
 use ordered_float::OrderedFloat;
 // use rustfft::num_complex::Complex;
@@ -89,6 +89,9 @@ pub struct SingleFrequencyState {
     activity_increment: f64,
 }
 
+const ACTIVITY_THRESHOLD: f64 = 8.0;
+const MAX_ACTIVITY_CONTRIBUTION_PER_FREQUENCY: f64 = 2.0;
+
 impl SingleFrequencyState {
     pub fn new(frequency: f64) -> SingleFrequencyState {
         SingleFrequencyState {
@@ -156,33 +159,15 @@ impl SingleFrequencyState {
     // }
 
     pub fn latest_activity_level(&self) -> f64 {
-        (self.corrected_nudft_norms.last().unwrap() - self.activity_threshold)
-            / self.activity_increment
+        ((self.corrected_nudft_norms.last().unwrap() - self.activity_threshold)
+            / self.activity_increment)
+            .clamp(0.0, MAX_ACTIVITY_CONTRIBUTION_PER_FREQUENCY)
     }
 
-    pub fn conflicting_signal_is_active(&mut self, max_activity_level_of_conflicting_signal: f64) {
-        let my_activity_level = self.latest_activity_level();
-        let target_level;
-        if my_activity_level > 1.0 {
-            // we are ACTIVE:
-            // no need to yield to other signals that are MAYBE,
-            // but if another signal is ACTIVE, we want to reduce both until one isn't
-            if max_activity_level_of_conflicting_signal > 1.0 {
-                target_level = f64::max(
-                    0.99,
-                    my_activity_level - (max_activity_level_of_conflicting_signal - 0.99),
-                );
-            } else {
-                return;
-            }
-        } else if my_activity_level > 0.0 {
-            // we are MAYBE:
-            // yield to both ACTIVE and MAYBE signals, but do it incrementally, so that if we are genuinely being activated,
-            // we will outpace the incremental threshold-increase and become ACTIVE
-            target_level = f64::max(0.0, my_activity_level - 1.0 / 250.0);
-        } else {
-            return;
-        }
+    pub fn reduce_activity_level(&mut self, target_level: f64) {
+        assert!(target_level <= self.latest_activity_level());
+        assert!(target_level <= MAX_ACTIVITY_CONTRIBUTION_PER_FREQUENCY);
+        assert!(target_level >= 0.0);
 
         // linear combination of current activity rules and new
         // l=(x - ((1-a)*t0+a*t1))/((1-a)*i0+a*i1)
@@ -196,7 +181,7 @@ impl SingleFrequencyState {
         let i0 = self.activity_increment;
         let t1 = self.current_max_across_current_chunk_and_all_saved_chunks;
         let i1 = self.current_stddev_of_top_nonadjacent_chunks;
-        let a = (x - t0 - l * i0) / (l * (i1 - i0) + t1 - t0);
+        let a = ((x - t0 - l * i0) / (l * (i1 - i0) + t1 - t0)).clamp(0.0, 1.0);
         self.activity_threshold = t0 * (1.0 - a) + t1 * a;
         self.activity_increment = i0 * (1.0 - a) + i1 * a;
         let epsilon = 0.0001;
@@ -215,8 +200,8 @@ pub struct Signal {
     pub recent_raw_inputs: VecDeque<f64>,
     pub history: VecDeque<HistoryFrame>,
     pub frequency_states: Vec<SingleFrequencyState>,
-    pub max_activity_level: f64,
-    pub frequencies_history: VecDeque<Vec<f64>>,
+    pub aggregate_activity_level: f64,
+    pub frequencies_history: [VecDeque<Vec<f64>>; 3],
     pub active_state: ActiveState,
 }
 
@@ -234,15 +219,67 @@ impl Signal {
     pub fn is_active(&self) -> bool {
         matches!(self.active_state, ActiveState::Active { .. })
     }
-    pub fn max_activity_level(&self) -> f64 {
-        self.max_activity_level
+    pub fn aggregate_activity_level(&self) -> f64 {
+        self.aggregate_activity_level
+    }
+    fn reduce_aggregate_activity_level(&mut self, target_level: f64) {
+        assert!(target_level <= self.aggregate_activity_level);
+        assert!(target_level >= 0.0);
+
+        let fraction_left = target_level / self.aggregate_activity_level;
+        let mut new_total = 0.0;
+        for state in &mut self.frequency_states {
+            if state.latest_activity_level() > 0.0 {
+                state.reduce_activity_level(state.latest_activity_level() * fraction_left);
+            }
+            new_total += state.latest_activity_level();
+        }
+        self.aggregate_activity_level = new_total;
+        let epsilon = 0.0001;
+        assert!(
+            fraction_left >= 0.0 - epsilon
+                && fraction_left <= 1.0 + epsilon
+                && (self.aggregate_activity_level - target_level).abs() < epsilon,
+            "Guess I did the math wrong? fraction_left:{fraction_left}, target_level:{target_level}, self.aggregate_activity_level:{q}",
+            q = self.aggregate_activity_level
+        );
     }
     pub fn conflicting_signal_is_active(&mut self, max_activity_level_of_conflicting_signal: f64) {
-        for state in &mut self.frequency_states {
-            state.conflicting_signal_is_active(max_activity_level_of_conflicting_signal);
+        const INCREMENTAL_REDUCTION_PER_FRAME: f64 = 1.0 / 250.0;
+        if self.aggregate_activity_level > ACTIVITY_THRESHOLD {
+            // we are ACTIVE:
+            // no need to yield to other signals that are MAYBE,
+            // but if another signal is ACTIVE, we want to reduce both until one isn't
+            if max_activity_level_of_conflicting_signal > ACTIVITY_THRESHOLD {
+                if max_activity_level_of_conflicting_signal > self.aggregate_activity_level {
+                    self.reduce_aggregate_activity_level(
+                        ACTIVITY_THRESHOLD - INCREMENTAL_REDUCTION_PER_FRAME,
+                    )
+                } else {
+                    let max_other_reduction_size = max_activity_level_of_conflicting_signal
+                        - (ACTIVITY_THRESHOLD - INCREMENTAL_REDUCTION_PER_FRAME);
+                    self.reduce_aggregate_activity_level(
+                        self.aggregate_activity_level - max_other_reduction_size,
+                    )
+                }
+            }
+        } else if self.aggregate_activity_level > 0.0 {
+            // we are MAYBE:
+            // yield to both ACTIVE and MAYBE signals, but do it incrementally, so that if we are genuinely being activated,
+            // we will outpace the incremental threshold-increase and become ACTIVE
+            self.reduce_aggregate_activity_level(f64::max(
+                0.0,
+                self.aggregate_activity_level - INCREMENTAL_REDUCTION_PER_FRAME,
+            ));
         }
     }
-    pub fn receive_raw(&mut self, raw_value: f64, time: f64) {
+    pub fn receive_raw(
+        &mut self,
+        raw_value: f64,
+        time: f64,
+        report_frame: impl FnOnce(HistoryFrame),
+        report_frequency_frame: impl FnOnce(FrequenciesFrame),
+    ) {
         self.total_inputs += 1;
         self.recent_raw_inputs.push_back(raw_value / 1500.0);
         if self.recent_raw_inputs.len() > 1000 {
@@ -259,12 +296,11 @@ impl Signal {
         for state in &mut self.frequency_states {
             state.observe_raw_signal_value(raw_value / 1500.0, time);
         }
-        self.max_activity_level = self
+        self.aggregate_activity_level = self
             .frequency_states
             .iter()
             .map(SingleFrequencyState::latest_activity_level)
-            .max_by_key(|&f| OrderedFloat(f))
-            .unwrap();
+            .sum::<f64>();
         let values: Vec<f64> = self
             .frequency_states
             .iter()
@@ -294,12 +330,26 @@ impl Signal {
             // for value in &mut values {
             //     *value *= scale;
             // }
-            self.frequencies_history
-                .push_back(values.iter().map(|v| v * scale).collect());
-            self.frequencies_history
-                .push_back(thresholds.iter().map(|v| v * scale).collect());
-            while self.frequencies_history.len() > 800 * 2 / FRAMES_PER_FFT {
-                self.frequencies_history.pop_front();
+            self.frequencies_history[0].push_back(values.iter().map(|v| v * scale).collect());
+            self.frequencies_history[1].push_back(thresholds.iter().map(|v| v * scale).collect());
+            self.frequencies_history[2].push_back(
+                self.frequency_states
+                    .iter()
+                    .map(SingleFrequencyState::latest_activity_level)
+                    .collect(),
+            );
+            report_frequency_frame(FrequenciesFrame {
+                time,
+                values: self
+                    .frequencies_history
+                    .iter()
+                    .map(|h| h.back().unwrap().clone())
+                    .collect(),
+            });
+            for h in &mut self.frequencies_history {
+                while h.len() > 800 / FRAMES_PER_FFT {
+                    h.pop_front();
+                }
             }
         }
 
@@ -404,6 +454,7 @@ impl Signal {
                 activity_threshold,
                 too_much_threshold,
             });
+            report_frame(self.history.back().unwrap().clone());
             while self.history.front().unwrap().time < time - 3.0 {
                 self.history.pop_front();
             }
