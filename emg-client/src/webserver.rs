@@ -23,6 +23,10 @@ pub enum MessageToFrontend {
         server_index: usize,
         frames: [Vec<FrequenciesFrame>; 4],
     },
+    UpdateFollower {
+        name: String,
+        latest_move_time: f64,
+    },
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]

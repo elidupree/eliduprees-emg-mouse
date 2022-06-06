@@ -99,6 +99,17 @@ pub struct MessageFromIdentifiedFollower {
     message: MessageFromFollower,
 }
 
+trait NotifyOptionExt {
+    fn notify(&mut self, message: MessageToFrontend);
+}
+impl NotifyOptionExt for Option<Addr<FrontendSession>> {
+    fn notify(&mut self, message: MessageToFrontend) {
+        if let Some(session) = self {
+            session.do_send(message);
+        }
+    }
+}
+
 impl SupervisedServer {
     fn reconnected(&mut self) {
         self.signals = Default::default();
@@ -216,6 +227,13 @@ impl Handler<MessageFromIdentifiedFollower> for Supervisor {
                 let follower = self.remote_followers.get_mut(&name).unwrap();
                 follower.observe_message(time_since_start, now);
                 follower.remote_mouse_moved(time_since_start);
+                self.frontend_session
+                    .notify(MessageToFrontend::UpdateFollower {
+                        name: name.clone(),
+                        latest_move_time: (follower.most_recent_mouse_move() - self.start_time)
+                            .as_secs_f64(),
+                    });
+                //dbg!(&follower.follower);
             }
         }
     }
@@ -246,7 +264,15 @@ impl Handler<MessageFromServer> for Supervisor {
             (report.first_sample_index + report.samples.len() as u64 - 1) as f64,
             local_time_received,
         );
+
         self.local_follower.update_most_recent_mouse_move();
+        self.frontend_session
+            .notify(MessageToFrontend::UpdateFollower {
+                name: "Local".to_string(),
+                latest_move_time: (self.local_follower.most_recent_mouse_move() - self.start_time)
+                    .as_secs_f64(),
+            });
+
         self.update_active_follower();
 
         let mut new_history_frames = [const { Vec::new() }; 4];
@@ -338,19 +364,19 @@ impl Handler<MessageFromServer> for Supervisor {
             //     report.time_since_start.as_micros(),
             // );
         }
-        if let Some(session) = &mut self.frontend_session {
-            if !new_history_frames[0].is_empty() {
-                session.do_send(MessageToFrontend::NewHistoryFrames {
+        if !new_history_frames[0].is_empty() {
+            self.frontend_session
+                .notify(MessageToFrontend::NewHistoryFrames {
                     server_index,
                     frames: new_history_frames,
                 });
-            }
-            if !new_frequencies_frames[0].is_empty() {
-                session.do_send(MessageToFrontend::NewFrequenciesFrames {
+        }
+        if !new_frequencies_frames[0].is_empty() {
+            self.frontend_session
+                .notify(MessageToFrontend::NewFrequenciesFrames {
                     server_index,
                     frames: new_frequencies_frames,
                 });
-            }
         }
     }
 }

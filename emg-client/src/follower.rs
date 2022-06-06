@@ -35,6 +35,7 @@ pub struct LocalFollower {
     most_recent_mouse_location: (i32, i32),
 }
 
+#[derive(Debug)]
 pub struct RemoteFollower {
     stream: Sender<MessageToFollower>,
     remote_time_estimator: RemoteTimeEstimator,

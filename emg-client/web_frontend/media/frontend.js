@@ -25,6 +25,7 @@ message_handlers.Initialize = ({ enabled }) => {
     recent_frames = [];
     latest_received_frame_time = 0;
     latest_drawn_frame_time = 0;
+    followers_element.replaceChildren();
 //    for (const server of recent_frames) {
 //      for (const signal of server) {
 //        for (const frame_kind of Object.values(signal)) {
@@ -74,6 +75,20 @@ message_handlers.NewHistoryFrames = ({ server_index, frames }) => {
 
 message_handlers.NewFrequenciesFrames = ({ server_index, frames }) => {
     add_fresh_frames("frequencies",server_index, frames);
+}
+
+message_handlers.UpdateFollower = ({ name, latest_move_time }) => {
+    const id = "follower_" + name;
+    let element = document.getElementById (id);
+    if (!element) {
+      element = document.createElement("div");
+      element.id = id;
+      followers_element.appendChild(element);
+    }
+    const text = name+": "+latest_move_time;
+    if (element.innerText != text) {
+      element.innerText = text;
+    }
 }
 
 function connect() {

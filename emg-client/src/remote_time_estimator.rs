@@ -20,6 +20,7 @@ the data structure uses only O(1) space.
 
 */
 
+#[derive(Debug)]
 pub struct RemoteTimeEstimator {
     tolerance: Duration,
     frontier: Vec<(f64, Instant)>,
@@ -68,6 +69,7 @@ impl RemoteTimeEstimator {
             // if the middle one arrived late, it can't be part of the frontier
             if bl_relative >= bl_relative_estimated - self.tolerance.as_secs_f64() {
                 self.frontier.pop();
+                self.before_middle_index = self.before_middle_index.min(self.frontier.len() - 1);
             } else {
                 break;
             }
