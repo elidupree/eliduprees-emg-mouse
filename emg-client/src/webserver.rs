@@ -6,6 +6,7 @@ use std::collections::{HashMap, VecDeque};
 #[rtype(result = "()")]
 pub enum MessageFromFrontend {
     SetEnabled(bool),
+    SetVariable(String, f64),
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug, Message)]

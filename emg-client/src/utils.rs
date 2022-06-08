@@ -4,11 +4,33 @@ use rodio::source::Buffered;
 use rodio::{Decoder, Source};
 use serde::de::DeserializeOwned;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fs::File;
 use std::io::BufReader;
+use std::lazy::SyncLazy;
 use std::path::Path;
+use std::sync::RwLock;
 use tokio_stream::StreamExt;
+
+static VARIABLES: SyncLazy<RwLock<HashMap<String, f64>>> = SyncLazy::new(|| {
+    RwLock::new({
+        [("activity_threshold", 2.0)]
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect()
+    })
+});
+
+pub fn set_variable(key: &str, value: f64) {
+    *VARIABLES.write().unwrap().get_mut(key).unwrap() = value;
+}
+pub fn get_variable(key: &str) -> f64 {
+    VARIABLES.read().unwrap()[key]
+}
+pub fn get_variables() -> HashMap<String, f64> {
+    VARIABLES.read().unwrap().clone()
+}
 
 pub fn load_sound(path: impl AsRef<Path>) -> Buffered<LoadedSound> {
     Decoder::new(BufReader::new(File::open(path).unwrap()))

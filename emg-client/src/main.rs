@@ -1,4 +1,5 @@
 #![feature(type_alias_impl_trait, inline_const)]
+#![feature(once_cell)]
 
 mod bluetooth;
 mod follower;

@@ -2,6 +2,7 @@
 const canvas = document.getElementById ("canvas")
 const context = canvas.getContext ("2d")
 const followers_element = document.getElementById ("followers");
+const variables_element = document.getElementById ("variables");
 const enabled_checkbox = document.getElementById ("enabled_checkbox");
 
 let socket = null
@@ -19,13 +20,63 @@ enabled_checkbox.addEventListener("click", e => {
 const message_handlers = {}
 let recent_frames = [];
 
-message_handlers.Initialize = ({ enabled }) => {
+message_handlers.Initialize = ({ enabled, variables }) => {
     enabled_checkbox.checked = enabled;
     context.clearRect(0, 0, canvas.width, canvas.height);
     recent_frames = [];
     latest_received_frame_time = 0;
     latest_drawn_frame_time = 0;
-    followers_element.replaceChildren();
+    followers_element.innerHTML = "";
+    variables_element.innerHTML = "";
+
+
+  for (const [name, value] of Object.entries(variables)) {
+    const id = `variables_editor_${name}`;
+    if (!document.getElementById(id)) {
+      const new_container = document.createElement("div");
+      new_container.id = id;
+      new_container.className = "variables_editor_entry";
+      const number_input = document.createElement("input");
+      const range_input = document.createElement("input");
+
+      const update_range_input = val => {
+        range_input.value = val;
+        if (val > 0) {
+          range_input.setAttribute("min", val * 0.01);
+          range_input.setAttribute("max", val * 5);
+        } else {
+          range_input.setAttribute("min", val * 5);
+          range_input.setAttribute("max", -val * 5);
+        }
+        range_input.setAttribute("step", val * 0.01);
+      }
+
+      number_input.id = `${id}_number`;
+      number_input.setAttribute("type", "number");
+      number_input.value = value;
+      number_input.addEventListener("input", (event) => {
+        send("SetVariable", [name, number_input.valueAsNumber]);
+        update_range_input(number_input.valueAsNumber);
+      });
+
+      range_input.id = `${id}_range`;
+      range_input.setAttribute("type", "range");
+      update_range_input(value);
+      range_input.addEventListener("input", (event) => {
+        send("SetVariable", [name, range_input.valueAsNumber]);
+        number_input.value = range_input.valueAsNumber;
+      });
+
+      const label = document.createElement("label");
+      label.setAttribute("for", number_input.id);
+      label.textContent = name;
+
+      new_container.appendChild(range_input);
+      new_container.appendChild(number_input);
+      new_container.appendChild(label);
+      variables_element.appendChild(new_container);
+    }
+  }
 //    for (const server of recent_frames) {
 //      for (const signal of server) {
 //        for (const frame_kind of Object.values(signal)) {

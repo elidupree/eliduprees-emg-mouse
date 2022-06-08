@@ -186,7 +186,7 @@ impl Handler<NewFrontendSession> for Supervisor {
     ) -> Self::Result {
         message.session.do_send(MessageToFrontend::Initialize {
             enabled: self.enabled,
-            variables: Default::default(),
+            variables: crate::utils::get_variables(),
         });
         self.frontend_session = Some(message.session);
     }
@@ -208,6 +208,7 @@ impl Handler<MessageFromFrontend> for Supervisor {
                 }
                 self.enabled = new_enabled;
             }
+            MessageFromFrontend::SetVariable(key, value) => crate::utils::set_variable(&key, value),
         }
     }
 }
