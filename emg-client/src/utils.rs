@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use atomicbox::AtomicOptionBox;
 use bytes::{BufMut, BytesMut};
 use rodio::source::Buffered;
 use rodio::{Decoder, Source};
@@ -10,15 +11,20 @@ use std::fs::File;
 use std::io::BufReader;
 use std::lazy::SyncLazy;
 use std::path::Path;
-use std::sync::RwLock;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, RwLock};
 use tokio_stream::StreamExt;
 
 static VARIABLES: SyncLazy<RwLock<HashMap<String, f64>>> = SyncLazy::new(|| {
     RwLock::new({
-        [("activity_threshold", 2.0)]
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), v))
-            .collect()
+        [
+            ("max_activity_contribution_per_frequency", 2.0),
+            ("activity_threshold", 4.0),
+            ("incremental_reduction_per_frame", 1.0 / 250.0),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect()
     })
 });
 
@@ -30,6 +36,42 @@ pub fn get_variable(key: &str) -> f64 {
 }
 pub fn get_variables() -> HashMap<String, f64> {
     VARIABLES.read().unwrap().clone()
+}
+
+pub struct LatestSender<T> {
+    atom: Arc<AtomicOptionBox<T>>,
+}
+
+impl<T> LatestSender<T> {
+    pub fn send(&self, value: T) {
+        self.atom.swap(Some(Box::new(value)), Ordering::AcqRel);
+    }
+}
+
+pub struct LatestReceiver<T> {
+    atom: Arc<AtomicOptionBox<T>>,
+    current: Option<T>,
+}
+
+impl<T> LatestReceiver<T> {
+    pub fn current(&mut self) -> &mut Option<T> {
+        // note: can be changed to Acquire if https://github.com/jorendorff/atomicbox/issues/9 is fixed
+        if let Some(new) = self.atom.take(Ordering::AcqRel) {
+            self.current = Some(*new);
+        }
+        &mut self.current
+    }
+}
+
+pub fn latest_channel<T>() -> (LatestSender<T>, LatestReceiver<T>) {
+    let atom = Arc::new(AtomicOptionBox::none());
+    (
+        LatestSender { atom: atom.clone() },
+        LatestReceiver {
+            atom,
+            current: None,
+        },
+    )
 }
 
 pub fn load_sound(path: impl AsRef<Path>) -> Buffered<LoadedSound> {

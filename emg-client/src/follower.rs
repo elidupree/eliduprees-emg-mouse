@@ -118,7 +118,7 @@ impl LocalFollower {
         supervisor_address: &str,
         supervisor_cert_path: &str,
         name: String,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<!> {
         let mut roots = rustls::RootCertStore::empty();
         roots.add(&rustls::Certificate(std::fs::read(&supervisor_cert_path)?))?;
         let client_crypto = rustls::ClientConfig::builder()
@@ -133,17 +133,8 @@ impl LocalFollower {
         config.transport = Arc::new(transport_config);
         endpoint.set_default_client_config(config);
 
-        let quinn::NewConnection {
-            connection,
-            mut datagrams,
-            ..
-        } = endpoint
-            .connect(supervisor_address.parse().unwrap(), "EMG_supervisor")?
-            .await?;
-
-        connection
-            .send_bincode_oneshot_stream(&FollowerIntroduction { name })
-            .await?;
+        let (connection_sender, mut connection_receiver) =
+            crate::utils::latest_channel::<quinn::Connection>();
 
         std::thread::spawn(|| {
             let start = Instant::now();
@@ -154,8 +145,10 @@ impl LocalFollower {
                     if now - last_sent >= Duration::from_millis(1) {
                         let time_since_start = now - start;
                         let message = MessageFromFollower::MouseMoved { time_since_start };
-                        if let Err(e) = connection.send_bincode_datagram(&message) {
-                            eprintln!("error sending to supervisor: {:?}", e)
+                        if let Some(connection) = connection_receiver.current() {
+                            if let Err(e) = connection.send_bincode_datagram(&message) {
+                                eprintln!("error sending to supervisor: {:?}", e)
+                            }
                         }
                         last_sent = now;
                     }
@@ -164,10 +157,26 @@ impl LocalFollower {
             })
             .unwrap();
         });
-        while let Ok(Some(message)) = datagrams.next_bincode().await {
-            self.handle_message(message);
+
+        loop {
+            let quinn::NewConnection {
+                connection,
+                mut datagrams,
+                ..
+            } = endpoint
+                .connect(supervisor_address.parse().unwrap(), "EMG_supervisor")?
+                .await?;
+
+            connection
+                .send_bincode_oneshot_stream(&FollowerIntroduction { name: name.clone() })
+                .await?;
+
+            connection_sender.send(connection);
+
+            while let Ok(Some(message)) = datagrams.next_bincode().await {
+                self.handle_message(message);
+            }
         }
-        Ok(())
     }
 
     fn update_most_recent_mouse_move(&mut self) -> Option<Instant> {

@@ -3,6 +3,7 @@ use itertools::Itertools;
 use ordered_float::OrderedFloat;
 // use rustfft::num_complex::Complex;
 // use rustfft::FftPlanner;
+use crate::utils::get_variable;
 use arrayvec::ArrayVec;
 use num_complex::Complex;
 use statrs::statistics::Statistics;
@@ -89,9 +90,6 @@ pub struct SingleFrequencyState {
     activity_increment: f64,
 }
 
-const ACTIVITY_THRESHOLD: f64 = 8.0;
-const MAX_ACTIVITY_CONTRIBUTION_PER_FREQUENCY: f64 = 2.0;
-
 impl SingleFrequencyState {
     pub fn new(frequency: f64) -> SingleFrequencyState {
         SingleFrequencyState {
@@ -161,12 +159,12 @@ impl SingleFrequencyState {
     pub fn latest_activity_level(&self) -> f64 {
         ((self.corrected_nudft_norms.last().unwrap() - self.activity_threshold)
             / self.activity_increment)
-            .clamp(0.0, MAX_ACTIVITY_CONTRIBUTION_PER_FREQUENCY)
+            .clamp(0.0, get_variable("max_activity_contribution_per_frequency"))
     }
 
     pub fn reduce_activity_level(&mut self, target_level: f64) {
         assert!(target_level <= self.latest_activity_level());
-        assert!(target_level <= MAX_ACTIVITY_CONTRIBUTION_PER_FREQUENCY);
+        assert!(target_level <= get_variable("max_activity_contribution_per_frequency"));
         assert!(target_level >= 0.0);
 
         // linear combination of current activity rules and new
@@ -245,19 +243,20 @@ impl Signal {
         );
     }
     pub fn conflicting_signal_is_active(&mut self, max_activity_level_of_conflicting_signal: f64) {
-        const INCREMENTAL_REDUCTION_PER_FRAME: f64 = 1.0 / 250.0;
-        if self.aggregate_activity_level > ACTIVITY_THRESHOLD {
+        let activity_threshold = get_variable("activity_threshold");
+        let incremental_reduction_per_frame = get_variable("incremental_reduction_per_frame");
+        if self.aggregate_activity_level > activity_threshold {
             // we are ACTIVE:
             // no need to yield to other signals that are MAYBE,
             // but if another signal is ACTIVE, we want to reduce both until one isn't
-            if max_activity_level_of_conflicting_signal > ACTIVITY_THRESHOLD {
+            if max_activity_level_of_conflicting_signal > activity_threshold {
                 if max_activity_level_of_conflicting_signal > self.aggregate_activity_level {
                     self.reduce_aggregate_activity_level(
-                        ACTIVITY_THRESHOLD - INCREMENTAL_REDUCTION_PER_FRAME,
+                        activity_threshold - incremental_reduction_per_frame,
                     )
                 } else {
                     let max_other_reduction_size = max_activity_level_of_conflicting_signal
-                        - (ACTIVITY_THRESHOLD - INCREMENTAL_REDUCTION_PER_FRAME);
+                        - (activity_threshold - incremental_reduction_per_frame);
                     self.reduce_aggregate_activity_level(
                         self.aggregate_activity_level - max_other_reduction_size,
                     )
@@ -269,7 +268,7 @@ impl Signal {
             // we will outpace the incremental threshold-increase and become ACTIVE
             self.reduce_aggregate_activity_level(f64::max(
                 0.0,
-                self.aggregate_activity_level - INCREMENTAL_REDUCTION_PER_FRAME,
+                self.aggregate_activity_level - incremental_reduction_per_frame,
             ));
         }
     }

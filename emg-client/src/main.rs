@@ -1,5 +1,4 @@
-#![feature(type_alias_impl_trait, inline_const)]
-#![feature(once_cell)]
+#![feature(type_alias_impl_trait, inline_const, once_cell, never_type)]
 
 mod bluetooth;
 mod follower;
@@ -95,7 +94,7 @@ async fn main() -> anyhow::Result<()> {
                     matches.value_of("supervisor-cert-path").unwrap(),
                     matches.value_of("name").unwrap().to_string(),
                 )
-                .await
+                .await?
         }
         _ => {
             unreachable!()
