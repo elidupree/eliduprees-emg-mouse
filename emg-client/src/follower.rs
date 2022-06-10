@@ -159,23 +159,28 @@ impl LocalFollower {
         });
 
         loop {
-            let quinn::NewConnection {
+            if let Ok(quinn::NewConnection {
                 connection,
                 mut datagrams,
                 ..
-            } = endpoint
+            }) = endpoint
                 .connect(supervisor_address.parse().unwrap(), "EMG_supervisor")?
-                .await?;
+                .await
+            {
+                if connection
+                    .send_bincode_oneshot_stream(&FollowerIntroduction { name: name.clone() })
+                    .await
+                    .is_ok()
+                {
+                    connection_sender.send(connection);
 
-            connection
-                .send_bincode_oneshot_stream(&FollowerIntroduction { name: name.clone() })
-                .await?;
-
-            connection_sender.send(connection);
-
-            while let Ok(Some(message)) = datagrams.next_bincode().await {
-                self.handle_message(message);
+                    while let Ok(Some(message)) = datagrams.next_bincode().await {
+                        self.handle_message(message);
+                    }
+                }
             }
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
         }
     }
 
