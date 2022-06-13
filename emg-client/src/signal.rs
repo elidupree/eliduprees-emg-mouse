@@ -331,10 +331,13 @@ impl Signal {
             // }
             self.frequencies_history[0].push_back(values.iter().map(|v| v * scale).collect());
             self.frequencies_history[1].push_back(thresholds.iter().map(|v| v * scale).collect());
+            let max_activity_contribution_per_frequency =
+                get_variable("max_activity_contribution_per_frequency");
             self.frequencies_history[2].push_back(
                 self.frequency_states
                     .iter()
                     .map(SingleFrequencyState::latest_activity_level)
+                    .map(|a| a / max_activity_contribution_per_frequency)
                     .collect(),
             );
             report_frequency_frame(FrequenciesFrame {
