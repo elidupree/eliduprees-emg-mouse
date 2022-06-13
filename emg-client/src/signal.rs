@@ -80,7 +80,7 @@ Caveat: to be judged idle, the signal must not merely "not be explicitly judged 
 */
 const FFT_WINDOW: usize = 50;
 const SIZE_OF_CHUNK_OVER_WHICH_MAXIMUM_IS_TAKEN: usize = 100;
-const ACTIVITY_ONSET_LEEWAY: usize = 50; // note: the code currently relies on this being less than SIZE_OF_CHUNK_OVER_WHICH_MAXIMUM_IS_TAKEN
+const ACTIVITY_ONSET_LEEWAY: usize = 1000;
 const NUMBER_OF_CHUNKS_OVER_WHICH_MAXIMA_ARE_TAKEN: usize = 30;
 const FFT_HISTORY_SIZE: usize = 3000;
 
@@ -112,7 +112,7 @@ pub struct SingleFrequencyState {
     running_max_of_current_chunk: f64,
 
     activity_threshold_stats: ActivityThresholdStats,
-    activity_threshold_stats_candidate: ActivityThresholdStats,
+    activity_threshold_stats_candidates: VecDeque<(u64, ActivityThresholdStats)>,
 }
 
 impl SingleFrequencyState {
@@ -157,15 +157,32 @@ impl SingleFrequencyState {
                 top_nonadjacent_maxima.push(max);
                 maxima.drain(argmax.saturating_sub(1)..maxima.len().min(argmax + 2));
             }
-            let threshold = top_nonadjacent_maxima[0];
-            let increment = top_nonadjacent_maxima.into_iter().std_dev().max(0.0000001);
-            self.activity_threshold_stats_candidate = ActivityThresholdStats {
-                threshold,
-                increment,
+            if top_nonadjacent_maxima.len() >= 3 {
+                //let threshold = top_nonadjacent_maxima[0];
+                let increment = top_nonadjacent_maxima
+                    .iter()
+                    .copied()
+                    .std_dev()
+                    .max(0.0000001);
+                let threshold = top_nonadjacent_maxima.iter().copied().mean() + increment;
+                self.activity_threshold_stats_candidates.push_back((
+                    self.corrected_nudft_norms.num_values_seen(),
+                    ActivityThresholdStats {
+                        threshold,
+                        increment,
+                    },
+                ));
             }
         }
-        if chunk_phase == ACTIVITY_ONSET_LEEWAY as u64 && signal_idle {
-            self.activity_threshold_stats = self.activity_threshold_stats_candidate.clone();
+        while matches!(self.activity_threshold_stats_candidates.front(), Some((i, _)) if self.corrected_nudft_norms.num_values_seen() > i + ACTIVITY_ONSET_LEEWAY as u64)
+        {
+            let (_i, stats) = self
+                .activity_threshold_stats_candidates
+                .pop_front()
+                .unwrap();
+            if signal_idle {
+                self.activity_threshold_stats = stats;
+            }
         }
         // self.corrected_nudft_norm_squares
         //     .push(corrected_nudft_norm.powi(2));

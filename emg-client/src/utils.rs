@@ -18,8 +18,8 @@ use tokio_stream::StreamExt;
 static VARIABLES: SyncLazy<RwLock<HashMap<String, f64>>> = SyncLazy::new(|| {
     RwLock::new({
         [
-            ("max_activity_contribution_per_frequency", 10.0),
-            ("activity_threshold", 25.0),
+            ("max_activity_contribution_per_frequency", 30.0),
+            ("activity_threshold", 50.0),
             ("incremental_reduction_per_frame", 1.0 / 250.0),
         ]
         .into_iter()
