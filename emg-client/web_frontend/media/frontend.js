@@ -266,7 +266,8 @@ function update_canvas() {
               frames.forEach((frame, frame_index) => {
                 const x = x_fractional(frame.time);
                 let y = frame[key];
-                y = (-Math.log(y * 0.99 + 0.01) / Math.log(0.01) + 1)
+                //y = (-Math.log(y * 0.99 + 0.01) / Math.log(0.01) + 1)
+                y = y / 3;
                 y = y_fractional(y);
 
                 if (frame_index == 0) {

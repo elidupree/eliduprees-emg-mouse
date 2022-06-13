@@ -1,6 +1,4 @@
 use crate::webserver::{FrequenciesFrame, HistoryFrame};
-use itertools::Itertools;
-use ordered_float::OrderedFloat;
 // use rustfft::num_complex::Complex;
 // use rustfft::FftPlanner;
 use crate::utils::get_variable;
@@ -17,8 +15,13 @@ use std::ops::{AddAssign, Div, SubAssign};
 // }
 
 pub enum ActiveState {
-    Active { last_sustained: f64 },
-    Inactive { last_deactivated: f64 },
+    Active {
+        last_sustained_time: f64,
+    },
+    Inactive {
+        last_deactivated_time: f64,
+        last_deactivated_sample: i64,
+    },
 }
 
 #[derive(Default)]
@@ -66,10 +69,34 @@ impl<T: Copy + Div<f64>, const SIZE: usize> Window<T, SIZE> {
     }
 }
 
+/*
+
+Threshold-setting rule:
+
+When we judge that the signal is idle for 3 seconds, we update the activity threshold based on some statistics about the signal over those 3 seconds.
+
+Caveat: to be judged idle, the signal must not merely "not be explicitly judged active" for exactly those 3 seconds, because if it gets activated immediately after the 3 seconds, then the very end of the 3 seconds might be part of the onset. So we wait a little while (ACTIVITY_ONSET_LEEWAY) before applying the judgment.
+
+*/
 const FFT_WINDOW: usize = 50;
 const SIZE_OF_CHUNK_OVER_WHICH_MAXIMUM_IS_TAKEN: usize = 100;
+const ACTIVITY_ONSET_LEEWAY: usize = 50; // note: the code currently relies on this being less than SIZE_OF_CHUNK_OVER_WHICH_MAXIMUM_IS_TAKEN
 const NUMBER_OF_CHUNKS_OVER_WHICH_MAXIMA_ARE_TAKEN: usize = 30;
 const FFT_HISTORY_SIZE: usize = 3000;
+
+#[derive(Clone)]
+struct ActivityThresholdStats {
+    threshold: f64,
+    increment: f64,
+}
+impl Default for ActivityThresholdStats {
+    fn default() -> Self {
+        ActivityThresholdStats {
+            threshold: f64::MAX,
+            increment: 0.0000001,
+        }
+    }
+}
 #[derive(Default)]
 pub struct SingleFrequencyState {
     frequency: f64,
@@ -82,24 +109,25 @@ pub struct SingleFrequencyState {
     // for the running stddev:
     // corrected_nudft_norm_squares: Window<f64, FFT_HISTORY_SIZE>,
     chunk_maxima: Window<f64, NUMBER_OF_CHUNKS_OVER_WHICH_MAXIMA_ARE_TAKEN>,
-    current_max_across_current_chunk_and_all_saved_chunks: f64,
-    current_stddev_of_top_nonadjacent_chunks: f64,
     running_max_of_current_chunk: f64,
 
-    activity_threshold: f64,
-    activity_increment: f64,
+    activity_threshold_stats: ActivityThresholdStats,
+    activity_threshold_stats_candidate: ActivityThresholdStats,
 }
 
 impl SingleFrequencyState {
     pub fn new(frequency: f64) -> SingleFrequencyState {
         SingleFrequencyState {
             frequency,
-            activity_increment: 0.0000001,
-            current_stddev_of_top_nonadjacent_chunks: 0.0000001,
             ..Default::default()
         }
     }
-    pub fn observe_raw_signal_value(&mut self, raw_signal_value: f64, time: f64) {
+    pub fn observe_raw_signal_value(
+        &mut self,
+        raw_signal_value: f64,
+        time: f64,
+        signal_idle: bool,
+    ) {
         let direction = Complex::cis(time * TAU * self.frequency);
         self.raw_signal_values.push(raw_signal_value);
         self.directions.push(direction);
@@ -112,13 +140,9 @@ impl SingleFrequencyState {
         self.corrected_nudft_norms.push(corrected_nudft_norm);
         self.running_max_of_current_chunk =
             self.running_max_of_current_chunk.max(corrected_nudft_norm);
-        self.current_max_across_current_chunk_and_all_saved_chunks = self
-            .current_max_across_current_chunk_and_all_saved_chunks
-            .max(corrected_nudft_norm);
-        if self.corrected_nudft_norms.num_values_seen()
-            % SIZE_OF_CHUNK_OVER_WHICH_MAXIMUM_IS_TAKEN as u64
-            == 0
-        {
+        let chunk_phase = self.corrected_nudft_norms.num_values_seen()
+            % SIZE_OF_CHUNK_OVER_WHICH_MAXIMUM_IS_TAKEN as u64;
+        if chunk_phase == 0 {
             self.chunk_maxima.push(self.running_max_of_current_chunk);
             self.running_max_of_current_chunk = 0.0;
             let mut top_nonadjacent_maxima: ArrayVec<f64, 5> = ArrayVec::new();
@@ -133,18 +157,15 @@ impl SingleFrequencyState {
                 top_nonadjacent_maxima.push(max);
                 maxima.drain(argmax.saturating_sub(1)..maxima.len().min(argmax + 2));
             }
-            self.current_max_across_current_chunk_and_all_saved_chunks = top_nonadjacent_maxima[0];
-            self.current_stddev_of_top_nonadjacent_chunks =
-                top_nonadjacent_maxima.into_iter().std_dev().max(0.0000001);
-            if self.current_max_across_current_chunk_and_all_saved_chunks < self.activity_threshold
-            {
-                // activity_threshold reduction case:
-                // the assumption here is that the ambient noise has gone down,
-                // so we can just overwrite with the exact current value of the stddev over history length
-                self.activity_threshold =
-                    self.current_max_across_current_chunk_and_all_saved_chunks;
-                self.activity_increment = self.current_stddev_of_top_nonadjacent_chunks;
+            let threshold = top_nonadjacent_maxima[0];
+            let increment = top_nonadjacent_maxima.into_iter().std_dev().max(0.0000001);
+            self.activity_threshold_stats_candidate = ActivityThresholdStats {
+                threshold,
+                increment,
             }
+        }
+        if chunk_phase == ACTIVITY_ONSET_LEEWAY as u64 && signal_idle {
+            self.activity_threshold_stats = self.activity_threshold_stats_candidate.clone();
         }
         // self.corrected_nudft_norm_squares
         //     .push(corrected_nudft_norm.powi(2));
@@ -157,38 +178,9 @@ impl SingleFrequencyState {
     // }
 
     pub fn latest_activity_level(&self) -> f64 {
-        ((self.corrected_nudft_norms.last().unwrap() - self.activity_threshold)
-            / self.activity_increment)
+        ((self.corrected_nudft_norms.last().unwrap() - self.activity_threshold_stats.threshold)
+            / self.activity_threshold_stats.increment)
             .clamp(0.0, get_variable("max_activity_contribution_per_frequency"))
-    }
-
-    pub fn reduce_activity_level(&mut self, target_level: f64) {
-        assert!(target_level <= self.latest_activity_level());
-        assert!(target_level <= get_variable("max_activity_contribution_per_frequency"));
-        assert!(target_level >= 0.0);
-
-        // linear combination of current activity rules and new
-        // l=(x - ((1-a)*t0+a*t1))/((1-a)*i0+a*i1)
-        // l*((1-a)*i0+a*i1)=(x - ((1-a)*t0+a*t1))
-        // al(i1-i0) + li0 = a(t0-t1) - t0 + x
-        // a(l(i1-i0) + t1-t0) = x - t0 - li0
-        // a = (x - t0 - li0) / (l(i1-i0) + t1-t0)
-        let x = self.corrected_nudft_norms.last().unwrap();
-        let l = target_level;
-        let t0 = self.activity_threshold;
-        let i0 = self.activity_increment;
-        let t1 = self.current_max_across_current_chunk_and_all_saved_chunks;
-        let i1 = self.current_stddev_of_top_nonadjacent_chunks;
-        let a = ((x - t0 - l * i0) / (l * (i1 - i0) + t1 - t0)).clamp(0.0, 1.0);
-        self.activity_threshold = t0 * (1.0 - a) + t1 * a;
-        self.activity_increment = i0 * (1.0 - a) + i1 * a;
-        let epsilon = 0.0001;
-        assert!(
-            a >= 0.0 - epsilon
-                && a <= 1.0 + epsilon
-                && (self.latest_activity_level() - target_level).abs() < epsilon,
-            "Guess I did the math wrong? x:{x}, l:{l}, l_new:{q}, t0:{t0}, i0:{i0}, t1:{t1}, i1:{i1}, a:{a}", q = self.latest_activity_level(),
-        );
     }
 }
 
@@ -206,7 +198,8 @@ pub struct Signal {
 impl Default for ActiveState {
     fn default() -> Self {
         ActiveState::Inactive {
-            last_deactivated: 0.0,
+            last_deactivated_time: f64::MIN,
+            last_deactivated_sample: i64::MIN,
         }
     }
 }
@@ -217,61 +210,9 @@ impl Signal {
     pub fn is_active(&self) -> bool {
         matches!(self.active_state, ActiveState::Active { .. })
     }
-    pub fn aggregate_activity_level(&self) -> f64 {
-        self.aggregate_activity_level
-    }
-    fn reduce_aggregate_activity_level(&mut self, target_level: f64) {
-        assert!(target_level <= self.aggregate_activity_level);
-        assert!(target_level >= 0.0);
-
-        let fraction_left = target_level / self.aggregate_activity_level;
-        let mut new_total = 0.0;
-        for state in &mut self.frequency_states {
-            if state.latest_activity_level() > 0.0 {
-                state.reduce_activity_level(state.latest_activity_level() * fraction_left);
-            }
-            new_total += state.latest_activity_level();
-        }
-        self.aggregate_activity_level = new_total;
-        let epsilon = 0.0001;
-        assert!(
-            fraction_left >= 0.0 - epsilon
-                && fraction_left <= 1.0 + epsilon
-                && (self.aggregate_activity_level - target_level).abs() < epsilon,
-            "Guess I did the math wrong? fraction_left:{fraction_left}, target_level:{target_level}, self.aggregate_activity_level:{q}",
-            q = self.aggregate_activity_level
-        );
-    }
-    pub fn conflicting_signal_is_active(&mut self, max_activity_level_of_conflicting_signal: f64) {
-        let activity_threshold = get_variable("activity_threshold");
-        let incremental_reduction_per_frame = get_variable("incremental_reduction_per_frame");
-        if self.aggregate_activity_level > activity_threshold {
-            // we are ACTIVE:
-            // no need to yield to other signals that are MAYBE,
-            // but if another signal is ACTIVE, we want to reduce both until one isn't
-            if max_activity_level_of_conflicting_signal > activity_threshold {
-                if max_activity_level_of_conflicting_signal > self.aggregate_activity_level {
-                    self.reduce_aggregate_activity_level(
-                        activity_threshold - incremental_reduction_per_frame,
-                    )
-                } else {
-                    let max_other_reduction_size = max_activity_level_of_conflicting_signal
-                        - (activity_threshold - incremental_reduction_per_frame);
-                    self.reduce_aggregate_activity_level(
-                        self.aggregate_activity_level - max_other_reduction_size,
-                    )
-                }
-            }
-        } else if self.aggregate_activity_level > 0.0 {
-            // we are MAYBE:
-            // yield to both ACTIVE and MAYBE signals, but do it incrementally, so that if we are genuinely being activated,
-            // we will outpace the incremental threshold-increase and become ACTIVE
-            self.reduce_aggregate_activity_level(f64::max(
-                0.0,
-                self.aggregate_activity_level - incremental_reduction_per_frame,
-            ));
-        }
-    }
+    // pub fn aggregate_activity_level(&self) -> f64 {
+    //     self.aggregate_activity_level
+    // }
     pub fn receive_raw(
         &mut self,
         raw_value: f64,
@@ -292,8 +233,24 @@ impl Signal {
                 .map(|f| SingleFrequencyState::new(f))
                 .collect();
         }
+        let signal_idle = match self.active_state {
+            ActiveState::Inactive {
+                last_deactivated_sample,
+                ..
+            } => {
+                last_deactivated_sample
+                    + i64::try_from(
+                        SIZE_OF_CHUNK_OVER_WHICH_MAXIMUM_IS_TAKEN
+                            * NUMBER_OF_CHUNKS_OVER_WHICH_MAXIMA_ARE_TAKEN
+                            + ACTIVITY_ONSET_LEEWAY,
+                    )
+                    .unwrap()
+                    < i64::try_from(self.total_inputs).unwrap()
+            }
+            _ => false,
+        };
         for state in &mut self.frequency_states {
-            state.observe_raw_signal_value(raw_value / 1500.0, time);
+            state.observe_raw_signal_value(raw_value / 1500.0, time, signal_idle);
         }
         self.aggregate_activity_level = self
             .frequency_states
@@ -308,7 +265,7 @@ impl Signal {
         let thresholds: Vec<f64> = self
             .frequency_states
             .iter()
-            .map(|state| state.activity_threshold)
+            .map(|state| state.activity_threshold_stats.threshold)
             .collect();
 
         const FRAMES_PER_FFT: usize = 10;
@@ -353,10 +310,7 @@ impl Signal {
                     h.pop_front();
                 }
             }
-        }
 
-        const VALUE_WINDOW: usize = 50;
-        if self.recent_raw_inputs.len() >= VALUE_WINDOW {
             // let fft = fft_planner.plan_fft_forward(VALUE_WINDOW);
             // let mut buffer: Vec<_> = self
             //     .recent_raw_inputs
@@ -367,13 +321,13 @@ impl Signal {
             //     .collect();
             // fft.process(&mut buffer);
             // let values: Vec<f64> = buffer.into_iter().skip(1).map(|c| c.norm_sqr()).collect();
-            let musc = values[4..=5]
-                .iter()
-                .chain(&values[7..=8])
-                .chain(&values[10..15])
-                .mean();
-            let etc = values[15..35].mean();
-            let value = if musc > etc { (musc - etc).sqrt() } else { 0.0 };
+            // let musc = values[4..=5]
+            //     .iter()
+            //     .chain(&values[7..=8])
+            //     .chain(&values[10..15])
+            //     .mean();
+            // let etc = values[15..35].mean();
+            // let value = if musc > etc { (musc - etc).sqrt() } else { 0.0 };
 
             // let value = self
             //     .recent_raw_inputs
@@ -382,60 +336,60 @@ impl Signal {
             //     .take(VALUE_WINDOW)
             //     .std_dev();
 
-            const CHUNK_SIZE: usize = 500;
-            let (activity_threshold, too_much_threshold) = if self.total_inputs % CHUNK_SIZE == 0 {
-                let recent_values: Vec<f64> = std::iter::once(value)
-                    .chain(
-                        self.history
-                            .iter()
-                            .rev()
-                            .take_while(|f| f.time >= time - 3.0)
-                            .map(|f| f.value),
-                    )
-                    .collect();
-                let max_spike_permitted: f64 = recent_values
-                    .iter()
-                    .copied()
-                    .chunks(CHUNK_SIZE)
-                    .into_iter()
-                    .map(|chunk| {
-                        let sorted: Vec<f64> = chunk.sorted_by_key(|&f| OrderedFloat(f)).collect();
-                        let a = sorted[sorted.len() / 8];
-                        let b = sorted[sorted.len() * 7 / 8];
-                        let d = b - a;
-                        b + d * 2.0
-                    })
-                    .min_by_key(|&f| OrderedFloat(f))
-                    .unwrap();
-
-                let is_idle = self
-                    .history
-                    .iter()
-                    .rev()
-                    .take_while(|f| f.time >= time - 3.0)
-                    .all(|f| f.value <= max_spike_permitted);
-
-                if is_idle {
-                    let sorted: Vec<f64> = recent_values
-                        .iter()
-                        .copied()
-                        .sorted_by_key(|&f| OrderedFloat(f))
-                        .collect();
-                    let a = sorted[sorted.len() / 8];
-                    let b = sorted[sorted.len() * 7 / 8];
-                    let d = b - a;
-
-                    (b + d * 1.4, b + d * 15.0)
-                } else if let Some(back) = self.history.back() {
-                    (back.activity_threshold, back.too_much_threshold)
-                } else {
-                    (1.0, 1.0)
-                }
-            } else if let Some(back) = self.history.back() {
-                (back.activity_threshold, back.too_much_threshold)
-            } else {
-                (1.0, 1.0)
-            };
+            // const CHUNK_SIZE: usize = 500;
+            // let (activity_threshold, too_much_threshold) = if self.total_inputs % CHUNK_SIZE == 0 {
+            //     let recent_values: Vec<f64> = std::iter::once(value)
+            //         .chain(
+            //             self.history
+            //                 .iter()
+            //                 .rev()
+            //                 .take_while(|f| f.time >= time - 3.0)
+            //                 .map(|f| f.value),
+            //         )
+            //         .collect();
+            //     let max_spike_permitted: f64 = recent_values
+            //         .iter()
+            //         .copied()
+            //         .chunks(CHUNK_SIZE)
+            //         .into_iter()
+            //         .map(|chunk| {
+            //             let sorted: Vec<f64> = chunk.sorted_by_key(|&f| OrderedFloat(f)).collect();
+            //             let a = sorted[sorted.len() / 8];
+            //             let b = sorted[sorted.len() * 7 / 8];
+            //             let d = b - a;
+            //             b + d * 2.0
+            //         })
+            //         .min_by_key(|&f| OrderedFloat(f))
+            //         .unwrap();
+            //
+            //     let is_idle = self
+            //         .history
+            //         .iter()
+            //         .rev()
+            //         .take_while(|f| f.time >= time - 3.0)
+            //         .all(|f| f.value <= max_spike_permitted);
+            //
+            //     if is_idle {
+            //         let sorted: Vec<f64> = recent_values
+            //             .iter()
+            //             .copied()
+            //             .sorted_by_key(|&f| OrderedFloat(f))
+            //             .collect();
+            //         let a = sorted[sorted.len() / 8];
+            //         let b = sorted[sorted.len() * 7 / 8];
+            //         let d = b - a;
+            //
+            //         (b + d * 1.4, b + d * 15.0)
+            //     } else if let Some(back) = self.history.back() {
+            //         (back.activity_threshold, back.too_much_threshold)
+            //     } else {
+            //         (1.0, 1.0)
+            //     }
+            // } else if let Some(back) = self.history.back() {
+            //     (back.activity_threshold, back.too_much_threshold)
+            // } else {
+            //     (1.0, 1.0)
+            // };
 
             // let recent_values = self
             //     .history
@@ -450,11 +404,14 @@ impl Signal {
             //     .max_by_key(|&v| OrderedFloat(v))
             //     .unwrap_or(1.0);
 
+            let value = self.aggregate_activity_level;
+            let activity_threshold = get_variable("activity_threshold");
+            let too_much_threshold = activity_threshold * 2.0;
             self.history.push_back(HistoryFrame {
                 time,
-                value,
-                activity_threshold,
-                too_much_threshold,
+                value: value / activity_threshold,
+                activity_threshold: 1.0,
+                too_much_threshold: 2.0,
             });
             report_frame(self.history.back().unwrap().clone());
             while self.history.front().unwrap().time < time - 3.0 {
@@ -462,31 +419,28 @@ impl Signal {
             }
 
             match self.active_state {
-                ActiveState::Active { last_sustained } => {
+                ActiveState::Active {
+                    last_sustained_time,
+                } => {
                     if value > activity_threshold {
                         self.active_state = ActiveState::Active {
-                            last_sustained: time,
+                            last_sustained_time: time,
                         };
-                    } else if time > last_sustained + 0.1 {
+                    } else if time > last_sustained_time + 0.1 {
                         self.active_state = ActiveState::Inactive {
-                            last_deactivated: time,
+                            last_deactivated_time: time,
+                            last_deactivated_sample: i64::try_from(self.total_inputs).unwrap(),
                         };
                     }
                 }
-                ActiveState::Inactive { last_deactivated } => {
-                    if time > last_deactivated + 0.4 && value > activity_threshold {
-                        if self
-                            .history
-                            .iter()
-                            .rev()
-                            .skip(60)
-                            .take(60)
-                            .any(|f| f.value > f.activity_threshold)
-                        {
-                            self.active_state = ActiveState::Active {
-                                last_sustained: time,
-                            };
-                        }
+                ActiveState::Inactive {
+                    last_deactivated_time,
+                    ..
+                } => {
+                    if time > last_deactivated_time + 0.4 && value > activity_threshold {
+                        self.active_state = ActiveState::Active {
+                            last_sustained_time: time,
+                        };
                     }
                 }
             }
