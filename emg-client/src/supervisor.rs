@@ -321,7 +321,8 @@ impl Handler<MessageFromServer> for Supervisor {
             {
                 fn progress(inputs: usize) -> usize {
                     let s = 400;
-                    (inputs * s + inputs * inputs) / (300 * s)
+                    let denom = 300 * s;
+                    (inputs * s + inputs * inputs + denom - 1) / denom
                 }
                 if progress(self.inputs_since_scroll_start + 1)
                     > progress(self.inputs_since_scroll_start)
