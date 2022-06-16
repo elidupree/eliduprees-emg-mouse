@@ -20,8 +20,8 @@ screen_width, screen_height = pyautogui.size()
 def face_loop():
     start = datetime.now()
     cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1024)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 768)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
     end = datetime.now()
     if not cap.isOpened():
         print("Cannot open camera")
@@ -63,11 +63,11 @@ def face_loop():
 
             if results.multi_face_landmarks:
                 landmarks = np.array([[p.x - 0.5, p.y - 0.5] for p in results.multi_face_landmarks[0].landmark])
-                landmarks = landmarks[[4, 152, 263, 33, 287, 57]]
-                # if current_parameters is None:
-                #     current_parameters = Parameters.default_from_camera(landmarks)
-                # else:
-                #     current_parameters = current_parameters.conformed_to(landmarks)
+                # landmarks = landmarks[[4, 152, 263, 33, 287, 57]]
+                if current_parameters is None:
+                    current_parameters = Parameters.default_from_camera(landmarks)
+                else:
+                    current_parameters = current_parameters.conformed_to(landmarks)
                 # X = np.array([[a for p in results.multi_face_landmarks[0].landmark for a in [p.x, p.y]]])
                 # mouse_pos = list(pyautogui.position())
                 # y = np.array([mouse_pos])
@@ -112,13 +112,14 @@ def face_loop():
 
             queue.append(image)
 
-            if len(queue) == 60:
-                cv2.imshow('MediaPipe Face Mesh', cv2.flip(queue.popleft(), 1))
-                print(f"FPS: {frames / (datetime.now() - start).total_seconds():.1f}")
-            if cv2.waitKey(2) & 0xFF == 27:
-                break
-    cap.release()
+            print(f"FPS: {frames / (datetime.now() - start).total_seconds():.1f}")
+            if len(queue) == 60: u
+            cv2.imshow('MediaPipe Face Mesh', cv2.flip(queue.popleft(), 1))
+        if cv2.waitKey(2) & 0xFF == 27:
+            break
 
+
+cap.release()
 
 # def tk_thread():
 #     root = tk.Tk()
