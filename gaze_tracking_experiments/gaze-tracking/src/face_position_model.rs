@@ -17,6 +17,8 @@ pub struct AnalyzedFacePositionModel {
     camera_landmarks: Arc<[Vector2<f64>]>,
     loss: f64,
     center_of_mass: Vector3<f64>,
+    d_loss_d_fov_slope: Vector2<f64>,
+    d_loss_d_landmarks: Vec<Vector3<f64>>,
     d_loss_d_translation: Vector3<f64>,
     d_loss_d_rotation_about_center_of_mass: [f64; 3],
 }
@@ -40,6 +42,7 @@ impl FacePositionModel {
         let mut center_of_mass = Vector3::new(0.0, 0.0, 0.0);
         let mut d_loss_d_translation = Vector3::new(0.0, 0.0, 0.0);
         let mut d_loss_d_rotation_about_origin = [0.0, 0.0, 0.0];
+        let mut d_loss_d_landmarks = Vec::with_capacity(self.landmarks.len());
         let &[cfx, cfy] = self.camera_fov_slope.as_array();
 
         for (camera_landmark, model_landmark) in iter::zip(&*camera_landmarks, &*self.landmarks) {
@@ -47,22 +50,27 @@ impl FacePositionModel {
             let &[x, y, z] = model_landmark.as_array();
             let &[cx, cy] = camera_landmark.as_array();
 
-            // "loss is the square of the planar distance between expected and observed camera locations"
-            loss += (x * cfx / z - cx).powi(2) + (y * cfy / z - cy).powi(2);
-
             // optimizations (avoid duplicate work)
             let recip_z = z.recip();
             let two_over_z2 = 2.0 * recip_z * recip_z;
             let two_over_z3 = two_over_z2 * recip_z;
-            let two_x_cfx_minus_z_cx_over_z2 = (x * cfx - z * cx) * two_over_z2;
-            let two_y_cfy_minus_z_cy_over_z2 = (y * cfy - z * cy) * two_over_z2;
+            let x_cfx = x * cfx;
+            let y_cfy = y * cfy;
+            let z_cx = z * cx;
+            let z_cy = z * cy;
+            let two_x_cfx_minus_z_cx_over_z2 = (x_cfx - z_cx) * two_over_z2;
+            let two_y_cfy_minus_z_cy_over_z2 = (y_cfy - z_cy) * two_over_z2;
+
+            // "loss is the square of the planar distance between expected and observed camera locations"
+            loss += (x_cfx / z - cx).powi(2) + (y_cfy / z - cy).powi(2);
 
             // derivatives of the above loss function
             let d_loss_d_landmark = Vector3::new(
                 cfx * two_x_cfx_minus_z_cx_over_z2,
                 cfy * two_y_cfy_minus_z_cy_over_z2,
-                (z * (x * cx + y * cy) - (cfx * x.powi(2) + cfy * y.powi(2))) * two_over_z3,
+                ((z_cx - x_cfx) * x + ((z_cy - y_cfy) * y)) * two_over_z3,
             );
+            d_loss_d_landmarks.push(d_loss_d_landmark);
             d_loss_d_fov_slope += Vector2::new(
                 x * two_x_cfx_minus_z_cx_over_z2,
                 y * two_y_cfy_minus_z_cy_over_z2,
@@ -97,6 +105,8 @@ impl FacePositionModel {
             camera_landmarks,
             loss,
             center_of_mass,
+            d_loss_d_fov_slope,
+            d_loss_d_landmarks,
             d_loss_d_translation,
             d_loss_d_rotation_about_center_of_mass,
         }
@@ -105,7 +115,20 @@ impl FacePositionModel {
     pub fn conformed_to(&self, camera_landmarks: Arc<[Vector2<f64>]>) -> Self {
         let mut current = self.analyze(camera_landmarks);
         let mut translation = ChangeRunner::new(descend_by_translation);
-        translation.apply(&mut current);
+        let mut rotation = ChangeRunner::new(descend_by_rotation);
+        let mut reshaping = ChangeRunner::new(descend_by_reshaping);
+        let mut tweaking_fov = ChangeRunner::new(descend_by_tweaking_fov);
+        for iteration in 0..100 {
+            println!("{iteration}: {}", current.loss);
+            translation.apply(&mut current);
+            if iteration >= 10 {
+                rotation.apply(&mut current);
+            }
+            if iteration >= 20 {
+                tweaking_fov.apply(&mut current);
+                reshaping.apply(&mut current);
+            }
+        }
         current.model
     }
 }
@@ -163,10 +186,9 @@ fn descend_by_rotation(
     );
     for landmark in Arc::get_mut(&mut landmarks).unwrap() {
         for ((sin, cos), [d1, d2]) in sines_cosines.zip(ROTATION_DIMENSIONS) {
-            let ld1 = landmark[d1] * cos - landmark[d2] * sin;
-            let ld2 = landmark[d2] * cos + landmark[d1] * sin;
-            landmark[d1] = ld1;
-            landmark[d2] = ld2;
+            let relative = *landmark - analysis.center_of_mass;
+            landmark[d1] = analysis.center_of_mass[d1] + relative[d1] * cos - relative[d2] * sin;
+            landmark[d2] = analysis.center_of_mass[d2] + relative[d2] * cos + relative[d1] * sin;
         }
     }
     FacePositionModel {
@@ -179,78 +201,25 @@ fn descend_by_reshaping(
     analysis: &AnalyzedFacePositionModel,
     learning_rate: f64,
 ) -> FacePositionModel {
-    todo!()
+    FacePositionModel {
+        landmarks: analysis
+            .model
+            .landmarks
+            .iter()
+            .zip(&analysis.d_loss_d_landmarks)
+            .map(|(v, d_loss_d_landmark)| v - d_loss_d_landmark * learning_rate)
+            .collect(),
+        ..analysis.model
+    }
 }
-/*
 
-def conformed_to(self, camera_landmarks):
-current = ParametersAnalysis(self, camera_landmarks)
-moves = [ChangeRunner(MoveHead(d)) for d in range(3)]
-rotations = [ChangeRunner(RotateHead([c for c in range(3) if c != d])) for d in range(3)]
-reshape = ChangeRunner(ReshapeHead())
-for iteration in range(100):
-# print(f"Iter {iteration}:")
-candidates = moves.copy()
-if iteration > 10:
-candidates += rotations
-if iteration > 20:
-candidates += [reshape]
-for candidate in candidates:
-current.analyze()
-current = candidate.apply(current)
-if current.loss < 0.001 ** 2 * len(camera_landmarks):
-print(f"Good enough at iteration {iteration}")
-break
-
-return current.parameters
-
-
-def apply(self, new_parameters: arameters, current_analysis: ParametersAnalysis, learning_rate):
-center = current_analysis.center_of_mass
-
-derivative = np.zeros((3, 3))
-replace_submatrix(derivative, self.dimensions, self.dimensions, [
-[0, -1],
-[1, 0],
-])
-d_landmarks_d_radians = (
-current_analysis.parameters.landmarks - center) @ derivative.transpose()
-d_loss_d_radians = np.sum(current_analysis.d_loss_d_landmarks * d_landmarks_d_radians)
-radians = -d_loss_d_radians * learning_rate
-# print(f"RotateHead {self.dimensions}: {radians:.6f} radians")
-
-rotation = np.eye(3)
-replace_submatrix(rotation, self.dimensions, self.dimensions, [
-[np.cos(radians), -np.sin(radians)],
-[np.sin(radians), np.cos(radians)],
-])
-new_parameters.landmarks -= center
-new_parameters.landmarks = new_parameters.landmarks @ rotation.transpose()
-new_parameters.landmarks += center
-
-
-class MoveHead(ParametersChange):
-def __init__(self, dimension):
-self.dimension = dimension
-
-def __str__(self):
-return f"MoveHead({self.dimension})"
-
-def apply(self, new_parameters: Parameters, current_analysis: ParametersAnalysis, learning_rate):
-d_loss_d_distance = np.sum(current_analysis.d_loss_d_landmarks[:, self.dimension])
-distance = -d_loss_d_distance * learning_rate
-# print(f"MoveHead {self.dimension}: {distance:.6f} distance")
-
-new_parameters.landmarks[:, self.dimension] += distance
-
-
-class ReshapeHead(ParametersChange):
-def __str__(self):
-return f"ReshapeHead"
-
-def apply(self, new_parameters: Parameters, current_analysis: ParametersAnalysis, learning_rate):
-changes = -current_analysis.d_loss_d_landmarks * learning_rate
-# print(f"ReshapeHead: {np.mean(changes):.6f} mean distance")
-
-new_parameters.landmarks += changes
-*/
+fn descend_by_tweaking_fov(
+    analysis: &AnalyzedFacePositionModel,
+    learning_rate: f64,
+) -> FacePositionModel {
+    FacePositionModel {
+        landmarks: analysis.model.landmarks.clone(),
+        camera_fov_slope: analysis.model.camera_fov_slope
+            - analysis.d_loss_d_fov_slope * learning_rate,
+    }
+}
