@@ -1,3 +1,5 @@
+import json
+
 import cv2
 import mediapipe as mp
 from datetime import datetime, timedelta
@@ -9,6 +11,12 @@ import numpy as np
 import pyautogui
 import win32api
 from formulas import Parameters
+import sys
+
+
+def eprint(*args, **kwargs):
+    print(*args, file=sys.stderr, **kwargs)
+
 
 mp_drawing = mp.solutions.drawing_utils
 mp_drawing_styles = mp.solutions.drawing_styles
@@ -24,9 +32,9 @@ def face_loop():
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
     end = datetime.now()
     if not cap.isOpened():
-        print("Cannot open camera")
+        eprint("Cannot open camera")
         exit()
-    print("opened camera", (end - start))
+    eprint("opened camera", (end - start))
     queue = deque()
 
     # isoup_tree = iSOUPTreeRegressor()
@@ -36,8 +44,9 @@ def face_loop():
     # last_moved_time = datetime.now()
 
     frames = 0
+    start = datetime.now()
 
-    current_parameters = None
+    # current_parameters = None
 
     with mp_face_mesh.FaceMesh(
             static_image_mode=False,
@@ -48,12 +57,12 @@ def face_loop():
         while cap.isOpened():
             success, image = cap.read()
             if not success:
-                print("skipped failed read")
+                eprint("skipped failed read")
                 continue
 
             frames += 1
 
-            # print("got frame", image.shape)
+            # eprint("got frame", image.shape)
             image.flags.writeable = False
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             results = face_mesh.process(image)
@@ -62,17 +71,20 @@ def face_loop():
             image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 
             if results.multi_face_landmarks:
-                landmarks = np.array([[p.x - 0.5, p.y - 0.5] for p in results.multi_face_landmarks[0].landmark])
+                landmarks = [[p.x - 0.5, p.y - 0.5] for p in results.multi_face_landmarks[0].landmark]
+                json.dump(landmarks, sys.stdout)
+                print()
+                # landmarks = np.array([[p.x - 0.5, p.y - 0.5] for p in results.multi_face_landmarks[0].landmark])
                 # landmarks = landmarks[[4, 152, 263, 33, 287, 57]]
-                if current_parameters is None:
-                    current_parameters = Parameters.default_from_camera(landmarks)
-                else:
-                    current_parameters = current_parameters.conformed_to(landmarks)
+                # if current_parameters is None:
+                #     current_parameters = Parameters.default_from_camera(landmarks)
+                # else:
+                #     current_parameters = current_parameters.conformed_to(landmarks)
                 # X = np.array([[a for p in results.multi_face_landmarks[0].landmark for a in [p.x, p.y]]])
                 # mouse_pos = list(pyautogui.position())
                 # y = np.array([mouse_pos])
                 # y_pred = isoup_tree.predict(X)[0]
-                # print(mouse_pos, y_pred)
+                # eprint(mouse_pos, y_pred)
                 #
                 # if mouse_pos != last_moved_to and mouse_pos != last_shoved_to:
                 #     last_moved_to = mouse_pos
@@ -112,14 +124,14 @@ def face_loop():
 
             queue.append(image)
 
-            print(f"FPS: {frames / (datetime.now() - start).total_seconds():.1f}")
-            if len(queue) == 60: u
-            cv2.imshow('MediaPipe Face Mesh', cv2.flip(queue.popleft(), 1))
-        if cv2.waitKey(2) & 0xFF == 27:
-            break
+            eprint(f"FPS: {frames / (datetime.now() - start).total_seconds():.1f}")
+            if len(queue) == 60:
+                cv2.imshow('MediaPipe Face Mesh', cv2.flip(queue.popleft(), 1))
+            if cv2.waitKey(2) & 0xFF == 27:
+                break
 
+    cap.release()
 
-cap.release()
 
 # def tk_thread():
 #     root = tk.Tk()

@@ -119,7 +119,7 @@ impl FacePositionModel {
         let mut reshaping = ChangeRunner::new(descend_by_reshaping);
         let mut tweaking_fov = ChangeRunner::new(descend_by_tweaking_fov);
         for iteration in 0..100 {
-            println!("{iteration}: {}", current.loss);
+            //println!("{iteration}: {}", current.loss);
             translation.apply(&mut current);
             if iteration >= 10 {
                 rotation.apply(&mut current);
@@ -127,6 +127,10 @@ impl FacePositionModel {
             if iteration >= 20 {
                 tweaking_fov.apply(&mut current);
                 reshaping.apply(&mut current);
+            }
+            if current.loss < 0.001f64.powi(2) * self.landmarks.len() as f64 {
+                println!("Good enough at iteration {iteration}");
+                break;
             }
         }
         current.model

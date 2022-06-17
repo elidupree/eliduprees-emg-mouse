@@ -2,15 +2,23 @@
 
 use crate::face_position_model::FacePositionModel;
 use nalgebra::Vector2;
+use std::io::{BufRead, BufReader};
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 
 mod face_position_model;
 mod utils;
 
 fn main() {
+    let mut child = Command::new("python")
+        .args(["../main.py"])
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let child_output = BufReader::new(child.stdout.take().unwrap());
     let mut current_model: Option<FacePositionModel> = None;
-    let lines = std::io::stdin().lines();
-    for line in lines {
+
+    for line in child_output.lines() {
         let line = line.unwrap();
         let camera_landmarks: Arc<[Vector2<f64>]> = serde_json::from_str(&line).unwrap();
         if let Some(current_model) = current_model.as_mut() {
