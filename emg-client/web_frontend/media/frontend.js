@@ -267,7 +267,11 @@ function update_canvas() {
                 const x = x_fractional(frame.time);
                 let y = frame[key];
                 //y = (-Math.log(y * 0.99 + 0.01) / Math.log(0.01) + 1)
-                y = y / 10;
+                if (key == "too_much_threshold") {
+                  y = ((y - 1.0)*5) + 0.7;
+                } else {
+                  y = y / 10;
+                }
                 y = y_fractional(y);
 
                 if (frame_index == 0) {

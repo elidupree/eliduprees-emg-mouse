@@ -89,6 +89,7 @@ struct ActivityThresholdStats {
     threshold: f64,
     increment: f64,
 }
+
 impl Default for ActivityThresholdStats {
     fn default() -> Self {
         ActivityThresholdStats {
@@ -97,6 +98,7 @@ impl Default for ActivityThresholdStats {
         }
     }
 }
+
 #[derive(Default)]
 pub struct SingleFrequencyState {
     frequency: f64,
@@ -220,6 +222,7 @@ impl Default for ActiveState {
         }
     }
 }
+
 impl Signal {
     // pub fn new() -> Signal {
     //     Signal::default()
@@ -244,10 +247,12 @@ impl Signal {
         }
 
         if self.frequency_states.is_empty() {
-            self.frequency_states = (1..FFT_WINDOW)
-                .map(|f| f as f64 / (FFT_WINDOW as f64 / 1000.0))
-                // .map(|f| 500.0 * 0.895_f64.powi(f as i32))
-                .map(|f| SingleFrequencyState::new(f))
+            //self.frequency_states = (1..FFT_WINDOW)
+            // .map(|f| f as f64 / (FFT_WINDOW as f64 / 1000.0))
+            // .map(|f| 500.0 * 0.895_f64.powi(f as i32))
+            self.frequency_states = (0..FFT_WINDOW)
+                .map(|f| 20.0 * (500.0f64 / 20.0).powf(f as f64 / (FFT_WINDOW - 1) as f64))
+                .map(SingleFrequencyState::new)
                 .collect();
         }
         let signal_idle = match self.active_state {
@@ -423,12 +428,11 @@ impl Signal {
 
             let value = self.aggregate_activity_level;
             let activity_threshold = get_variable("activity_threshold");
-            let too_much_threshold = activity_threshold * 2.0;
             self.history.push_back(HistoryFrame {
                 time,
                 value: value / activity_threshold,
                 activity_threshold: 1.0,
-                too_much_threshold: 2.0,
+                too_much_threshold: *self.recent_raw_inputs.back().unwrap(), //2.0,
             });
             report_frame(self.history.back().unwrap().clone());
             while self.history.front().unwrap().time < time - 3.0 {
