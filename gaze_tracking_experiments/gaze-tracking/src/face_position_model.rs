@@ -1,4 +1,5 @@
-use crate::utils::VectorExt;
+use crate::utils::{Vector3Ext, VectorExt};
+use kiss3d::window::Window;
 use nalgebra::{Vector2, Vector3};
 use std::iter;
 use std::sync::Arc;
@@ -134,6 +135,31 @@ impl FacePositionModel {
             }
         }
         current.model
+    }
+
+    pub fn draw(&self, window: &mut Window) {
+        use kiss3d::nalgebra::Point3;
+
+        let white = Point3::new(1.0, 1.0, 1.0);
+
+        // camera box:
+        let [x, y, z] = [
+            0.5 / self.camera_fov_slope[0] as f32,
+            0.5 / self.camera_fov_slope[1] as f32,
+            1.0,
+        ];
+        let camera_wireframe_points = [
+            Point3::new(x, y, z),
+            Point3::new(-x, y, z),
+            Point3::new(-x, -y, z),
+            Point3::new(x, -y, z),
+        ];
+        for point in camera_wireframe_points {
+            window.draw_line(&Point3::new(0.0, 0.0, 0.0), &point, &white);
+        }
+        for landmark in self.landmarks.iter() {
+            window.draw_point(&landmark.to_kiss(), &white);
+        }
     }
 }
 
