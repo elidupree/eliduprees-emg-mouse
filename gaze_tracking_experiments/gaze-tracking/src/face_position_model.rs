@@ -6,6 +6,7 @@ use std::iter::zip;
 
 #[derive(Clone)]
 struct Frame {
+    time_index: usize,
     camera_landmarks: Matrix2xX<f64>,
     center_of_mass: Vector3<f64>,
     orientation: UnitQuaternion<f64>,
@@ -21,6 +22,7 @@ pub struct FacePositionModel {
 }
 
 struct FrameAnalysis {
+    loss: f64,
     d_loss_d_translation: Vector3<f64>,
     d_loss_d_rotation: Vector3<f64>,
 }
@@ -53,6 +55,7 @@ impl FacePositionModel {
         );
         FacePositionModel {
             frames: vec![Frame {
+                time_index: 0,
                 camera_landmarks,
                 center_of_mass: Vector3::new(0.0, 0.0, 1.0),
                 orientation: UnitQuaternion::identity(),
@@ -70,6 +73,7 @@ impl FacePositionModel {
         let &[cfx, cfy] = self.camera_fov_slope.as_ref();
 
         for frame in &self.frames {
+            let mut frame_loss = 0.0;
             let mut d_loss_d_translation = Vector3::new(0.0, 0.0, 0.0);
             let mut d_loss_d_rotation = Vector3::new(0.0, 0.0, 0.0);
             for ((camera_landmark, landmark_offset), mut d_loss_d_landmark_offset) in zip(
@@ -96,7 +100,7 @@ impl FacePositionModel {
                 let two_y_cfy_minus_z_cy_over_z2 = (y_cfy - z_cy) * two_over_z2;
 
                 // "loss is the square of the planar distance between expected and observed camera locations"
-                loss += (x_cfx / z - cx).powi(2) + (y_cfy / z - cy).powi(2);
+                frame_loss += (x_cfx / z - cx).powi(2) + (y_cfy / z - cy).powi(2);
 
                 // derivatives of the above loss function
                 let d_loss_d_landmark_position = Vector3::new(
@@ -127,7 +131,10 @@ impl FacePositionModel {
                 }
             }
 
+            loss += frame_loss;
+
             frames.push(FrameAnalysis {
+                loss: frame_loss,
                 d_loss_d_translation,
                 d_loss_d_rotation,
             });
@@ -144,6 +151,7 @@ impl FacePositionModel {
     pub fn add_frame(&mut self, camera_landmarks: Matrix2xX<f64>) {
         let last_frame = self.frames.last().unwrap();
         let new_frame = Frame {
+            time_index: last_frame.time_index + 1,
             camera_landmarks,
             ..*last_frame
         };
@@ -168,12 +176,36 @@ impl FacePositionModel {
             //     break;
             // }
         }
+
+        if self.frames.len() > 30 {
+            let orientation_difference_ranks =
+                crate::utils::ranks(self.frames.iter().zip(analysis.frames.iter()).map(
+                    |(frame, frame_analysis)| {
+                        self.frames
+                            .iter()
+                            .filter(|f2| f2.time_index != frame.time_index)
+                            .map(|f2| (f2.orientation.inverse() * frame.orientation).angle())
+                            .product::<f64>()
+                            / frame_analysis.loss
+                    },
+                ));
+
+            let least_valuable_index = orientation_difference_ranks
+                .into_iter()
+                .enumerate()
+                .min_by_key(|&(index, rank)| usize::max(index, rank))
+                .unwrap()
+                .0;
+
+            self.frames.remove(least_valuable_index);
+        }
     }
 
     pub fn draw(&self, window: &mut Window) {
         use kiss3d::nalgebra::Point3;
 
         let white = Point3::new(1.0, 1.0, 1.0);
+        let red = Point3::new(0.5, 0.0, 0.0);
 
         // camera box:
         let [x, y, z] = [
@@ -190,7 +222,12 @@ impl FacePositionModel {
         for point in camera_wireframe_points {
             window.draw_line(&Point3::new(0.0, 0.0, 0.0), &point, &white);
         }
-        let last_frame = self.frames.last().unwrap();
+        let (last_frame, others) = self.frames.split_last().unwrap();
+        for frame in others {
+            for offset in self.landmark_offsets.column_iter() {
+                window.draw_point(&frame.landmark_position(offset).to_kiss(), &red);
+            }
+        }
         for offset in self.landmark_offsets.column_iter() {
             window.draw_point(&last_frame.landmark_position(offset).to_kiss(), &white);
         }
