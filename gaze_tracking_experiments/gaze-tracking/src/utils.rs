@@ -1,4 +1,4 @@
-use nalgebra::Vector3;
+use nalgebra::{Matrix3xX, Vector3};
 
 pub type Vector<T, const DIMENSIONS: usize> =
     nalgebra::Vector<T, nalgebra::Const<DIMENSIONS>, nalgebra::ArrayStorage<T, DIMENSIONS, 1>>;
@@ -23,4 +23,8 @@ impl Vector3Ext for Vector3<f64> {
     fn to_kiss(&self) -> kiss3d::nalgebra::Point3<f32> {
         kiss3d::nalgebra::Point3::new(self[0] as f32, self[1] as f32, self[2] as f32)
     }
+}
+
+pub fn matrix_from_column_iter(iter: impl IntoIterator<Item = Vector3<f64>>) -> Matrix3xX<f64> {
+    Matrix3xX::from_columns(&iter.into_iter().collect::<Vec<_>>())
 }
