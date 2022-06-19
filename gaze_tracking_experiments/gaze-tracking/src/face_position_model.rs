@@ -51,7 +51,7 @@ impl FacePositionModel {
         let landmark_offsets = matrix_from_column_iter(
             camera_landmarks
                 .column_iter()
-                .map(|v| Vector3::new(v[0] - mean[0], v[1] - mean[1], 1.0)),
+                .map(|v| Vector3::new(v[0] - mean[0], v[1] - mean[1], 0.0)),
         );
         FacePositionModel {
             frames: vec![Frame {
