@@ -257,6 +257,7 @@ impl<F: FnMut(&FacePositionModel, &FacePositionModelAnalysis, f64) -> FacePositi
             *analysis = new_analysis;
         } else {
             self.learning_rate /= 2.0;
+            //assert!(self.learning_rate > 0.000000001);
         }
     }
 }
@@ -316,6 +317,7 @@ fn descend_by_reshaping(
     analysis: &FacePositionModelAnalysis,
     learning_rate: f64,
 ) -> FacePositionModel {
+    let deriv_mean = analysis.d_loss_d_landmark_offsets.column_mean();
     FacePositionModel {
         frames: model.frames.clone(),
         landmark_offsets: matrix_from_column_iter(
@@ -323,7 +325,9 @@ fn descend_by_reshaping(
                 .landmark_offsets
                 .column_iter()
                 .zip(analysis.d_loss_d_landmark_offsets.column_iter())
-                .map(|(v, d_loss_d_landmark_offset)| v - d_loss_d_landmark_offset * learning_rate),
+                .map(|(v, d_loss_d_landmark_offset)| {
+                    v - (d_loss_d_landmark_offset - deriv_mean) * learning_rate
+                }),
         ),
         ..*model
     }
