@@ -2,6 +2,7 @@ use crate::utils::{matrix_from_column_iter, Vector3Ext};
 use kiss3d::window::Window;
 use nalgebra::{Matrix2xX, Matrix3xX, UnitQuaternion, Vector2, Vector3, VectorSlice3};
 use std::iter::zip;
+use std::ops::Add;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -45,6 +46,11 @@ impl Frame {
     fn landmark_position(&self, offset: VectorSlice3<f64>) -> Vector3<f64> {
         self.center_of_mass + self.rotated_offset(offset)
     }
+}
+
+pub struct AddFrameResults {
+    pub final_loss: f64,
+    pub iterations: usize,
 }
 
 const ROTATION_DIMENSIONS: [[usize; 3]; 3] = [[0, 1, 2], [1, 2, 0], [2, 0, 1]];
@@ -206,7 +212,7 @@ impl FacePositionModel {
         }
     }
 
-    pub fn add_frame(&mut self, camera_landmarks: Matrix2xX<f64>) {
+    pub fn add_frame(&mut self, camera_landmarks: Matrix2xX<f64>) -> AddFrameResults {
         let last_frame = self.frames.last().unwrap();
         let new_frame = Frame {
             time_index: last_frame.time_index + 1,
@@ -219,8 +225,9 @@ impl FacePositionModel {
         // let mut rotation = ChangeRunner::new(descend_by_rotation);
         // let mut reshaping = ChangeRunner::new(descend_by_reshaping);
         // let mut tweaking_fov = ChangeRunner::new(descend_by_tweaking_fov);
-        let mut learning_rate = 1.0;
-        for iteration in 0..100 {
+        let mut learning_rate = 0.01;
+        let mut iteration = 0;
+        loop {
             //println!("{iteration}: {}", current.loss);
             // translation.apply(self, &mut analysis);
             // if iteration >= 10 {
@@ -249,9 +256,16 @@ impl FacePositionModel {
             assert!(infinitesimal_d_loss_d_learning <= 0.0);
             let new = descend(&self, &analysis, learning_rate);
             let new_analysis = new.analyze();
-            let observed_d_loss_d_learning = (new_analysis.loss - analysis.loss) / learning_rate;
+            let observed_d_loss = new_analysis.loss - analysis.loss;
+            let observed_d_loss_d_learning = observed_d_loss / learning_rate;
             if observed_d_loss_d_learning * 2.0 < infinitesimal_d_loss_d_learning {
                 learning_rate *= 1.1;
+                if observed_d_loss > -0.00000001 * self.landmark_offsets.len() as f64 {
+                    println!(
+                        "Good enough at iteration {iteration}; learning_rate is {learning_rate}"
+                    );
+                    break;
+                }
             } else {
                 learning_rate /= 2.0;
                 //assert!(self.learning_rate > 0.000000001);
@@ -264,6 +278,7 @@ impl FacePositionModel {
             //     println!("Good enough at iteration {iteration}");
             //     break;
             // }
+            iteration += 1;
         }
 
         if self.frames.len() > 30 {
@@ -287,6 +302,11 @@ impl FacePositionModel {
                 .0;
 
             self.frames.remove(least_valuable_index);
+        }
+
+        AddFrameResults {
+            final_loss: analysis.loss,
+            iterations: iteration + 1,
         }
     }
 
