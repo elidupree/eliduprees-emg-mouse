@@ -11,16 +11,20 @@ mod face_position_model;
 mod utils;
 
 fn main() {
-    let mut child = Command::new("python")
-        .args(["../main.py"])
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
-    let child_output = BufReader::new(child.stdout.take().unwrap());
+    // let mut child = Command::new("python")
+    //     .args(["../main.py"])
+    //     .stdout(Stdio::piped())
+    //     .spawn()
+    //     .unwrap();
+    // let child_output = BufReader::new(child.stdout.take().unwrap());
+    // let lines = child_output.lines();
+
+    let lines = BufReader::new(std::fs::File::open("../test_landmarks").unwrap()).lines();
+
     let mut current_model: Option<FacePositionModel> = None;
 
     let mut window = Window::new("EliDupree's EMG Mouse Gaze Tracker Viz");
-    for line in child_output.lines() {
+    for line in lines {
         let line = line.unwrap();
         // let camera_landmarks: Matrix2xX<f64> = serde_json::from_str(&line).unwrap();
         let camera_landmarks: Vec<Vector2<f64>> = serde_json::from_str(&line).unwrap();
