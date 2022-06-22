@@ -1,3 +1,4 @@
+use crate::utils;
 use crate::utils::{matrix_from_column_iter, Vector3Ext};
 use kiss3d::window::Window;
 use nalgebra::{Matrix2xX, Matrix3xX, UnitQuaternion, Vector2, Vector3, VectorSlice3};
@@ -234,6 +235,7 @@ impl FacePositionModel {
     }
 
     pub fn add_frame(&mut self, camera_landmarks: Matrix2xX<f64>) -> AddFrameResults {
+        utils::report_frame_started();
         let last_frame = self.frames.last().unwrap();
         let new_frame = Frame {
             time_index: last_frame.time_index + 1,
@@ -252,6 +254,12 @@ impl FacePositionModel {
             learning_rate = 0.01;
             iteration = 0;
             loop {
+                let do_reports = !last_frame_only;
+                if do_reports {
+                    utils::report_iteration_started();
+                    utils::report("loss", analysis.loss);
+                    utils::report("learning_rate", learning_rate);
+                }
                 //println!("{iteration}: {}", current.loss);
                 // translation.apply(self, &mut analysis);
                 // if iteration >= 10 {
@@ -306,7 +314,7 @@ impl FacePositionModel {
 
         if self.frames.len() > 30 {
             let orientation_difference_ranks =
-                crate::utils::ranks(self.frames.iter().zip(analysis.frames.iter()).map(
+                utils::ranks(self.frames.iter().zip(analysis.frames.iter()).map(
                     |(frame, frame_analysis)| {
                         self.frames
                             .iter()

@@ -1,4 +1,7 @@
 use nalgebra::{Matrix3xX, Vector3};
+use serde::Serialize;
+use std::cell::RefCell;
+use std::io::BufWriter;
 
 pub type Vector<T, const DIMENSIONS: usize> =
     nalgebra::Vector<T, nalgebra::Const<DIMENSIONS>, nalgebra::ArrayStorage<T, DIMENSIONS, 1>>;
@@ -37,4 +40,56 @@ pub fn ranks(iter: impl IntoIterator<Item = f64>) -> Vec<usize> {
         ranks[i] = rank;
     }
     ranks
+}
+
+#[derive(Serialize, Default)]
+struct FrameReport {
+    iterations: Vec<serde_json::Map<String, serde_json::Value>>,
+}
+
+#[derive(Serialize, Default)]
+struct Reports {
+    frames: Vec<FrameReport>,
+}
+
+thread_local! {static REPORTS: RefCell<Reports>=RefCell:: default()}
+
+pub fn report_frame_started() {
+    REPORTS.with(|reports| reports.borrow_mut().frames.push(FrameReport::default()));
+}
+
+pub fn report_iteration_started() {
+    REPORTS.with(|reports| {
+        reports
+            .borrow_mut()
+            .frames
+            .last_mut()
+            .unwrap()
+            .iterations
+            .push(serde_json::Map::default());
+    });
+}
+
+pub fn report(key: &str, value: impl Into<serde_json::Value>) {
+    REPORTS.with(|reports| {
+        reports
+            .borrow_mut()
+            .frames
+            .last_mut()
+            .unwrap()
+            .iterations
+            .last_mut()
+            .unwrap()
+            .insert(key.to_string(), value.into());
+    });
+}
+
+pub fn save_reports() {
+    REPORTS.with(|reports| {
+        serde_json::to_writer(
+            BufWriter::new(std::fs::File::create("../reports.json").unwrap()),
+            &*reports.borrow(),
+        )
+        .unwrap();
+    });
 }

@@ -45,4 +45,5 @@ fn main() {
         }
         window.render();
     }
+    utils::save_reports()
 }
