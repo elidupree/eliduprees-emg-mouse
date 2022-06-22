@@ -5,7 +5,7 @@ use crate::face_position_model::{AddFrameResults, FacePositionModel};
 use kiss3d::window::Window;
 use nalgebra::{Matrix2xX, Vector2};
 use std::io::{BufRead, BufReader};
-use std::process::{Command, Stdio};
+// use std::process::{Command, Stdio};
 
 mod face_position_model;
 mod utils;
