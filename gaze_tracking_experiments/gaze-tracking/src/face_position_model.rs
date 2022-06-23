@@ -259,6 +259,10 @@ impl FacePositionModel {
                     utils::report_iteration_started();
                     utils::report("loss", analysis.loss);
                     utils::report("learning_rate", learning_rate);
+                    utils::report(
+                        "proposed_descent_kind_magnitudes",
+                        proposed_descent_kind_magnitudes(&analysis).as_slice(),
+                    );
                 }
                 //println!("{iteration}: {}", current.loss);
                 // translation.apply(self, &mut analysis);
@@ -428,6 +432,24 @@ fn descend_last_frame(
         landmark_offsets: model.landmark_offsets.clone(),
         camera_fov_slope: model.camera_fov_slope.clone(),
     }
+}
+
+fn proposed_descent_kind_magnitudes(analysis: &FacePositionModelAnalysis) -> [f64; 4] {
+    let translation = analysis
+        .frames
+        .iter()
+        .map(|frame| frame.proposed_translation.norm_squared())
+        .sum::<f64>()
+        .sqrt();
+    let rotation = analysis
+        .frames
+        .iter()
+        .map(|frame| frame.proposed_rotation_euler_angles.norm_squared())
+        .sum::<f64>()
+        .sqrt();
+    let reshaping = analysis.proposed_landmark_offsets_change.norm();
+    let fov = analysis.proposed_fov_slope_change.norm();
+    [translation, rotation, reshaping, fov]
 }
 
 // fn descend_by_translation(

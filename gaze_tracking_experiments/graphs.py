@@ -7,8 +7,17 @@ with open("reports.json") as file:
 
 fig, ax = plt.subplots()
 
-for frame in data["frames"]:
+frames_start = 103
+frames_len = 1
+frames = data['frames'][frames_start:frames_start + frames_len]
+print(f"plotting {len(frames)} frames")
+
+for frame in frames:
     ax.plot([iteration["learning_rate"] for iteration in frame["iterations"]])
+    for descent_kind_index, color in enumerate(["red", "green", "blue", "purple"]):
+        ax.plot(
+            [iteration["proposed_descent_kind_magnitudes"][descent_kind_index] for iteration in frame["iterations"]],
+            c=color)
 
 ax.set_xlabel("Iteration")
 ax.set_ylabel("Learning rate")
