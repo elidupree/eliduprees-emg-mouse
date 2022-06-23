@@ -1,7 +1,7 @@
 use crate::utils;
 use crate::utils::{matrix_from_column_iter, Vector3Ext};
 use kiss3d::window::Window;
-use nalgebra::{Matrix2xX, Matrix3xX, UnitQuaternion, Vector2, Vector3, VectorSlice3};
+use nalgebra::{Matrix2xX, Matrix3xX, Unit, UnitQuaternion, Vector2, Vector3, VectorSlice3};
 use std::iter::zip;
 use std::sync::Arc;
 
@@ -29,7 +29,7 @@ struct FrameAnalysis {
     d_loss_d_translation: Vector3<f64>,
     d_loss_d_rotation: Vector3<f64>,
     proposed_translation: Vector3<f64>,
-    proposed_rotation_euler_angles: Vector3<f64>,
+    proposed_rotation: Vector3<f64>,
 }
 
 #[derive(Clone)]
@@ -191,7 +191,7 @@ impl FacePositionModel {
                 d_loss_d_translation,
                 d_loss_d_rotation,
                 proposed_translation: -d_loss_d_translation * 0.25, //.component_div(&d2_loss_d_translation2),
-                proposed_rotation_euler_angles: -d_loss_d_rotation * 4.0, //.component_div(&d2_loss_d_rotation2),
+                proposed_rotation: -d_loss_d_rotation * 4.0, //.component_div(&d2_loss_d_rotation2),
             });
         }
         //assert!(d2_loss_d_landmark_offsets2.iter().all(|&v| v >= 0.0));
@@ -217,9 +217,7 @@ impl FacePositionModel {
             .iter()
             .map(|frame| {
                 frame.proposed_translation.dot(&frame.d_loss_d_translation)
-                    + frame
-                        .proposed_rotation_euler_angles
-                        .dot(&frame.d_loss_d_rotation)
+                    + frame.proposed_rotation.dot(&frame.d_loss_d_rotation)
             })
             .sum::<f64>();
         if !last_frame_only {
@@ -405,16 +403,12 @@ fn descend(
             .frames
             .iter()
             .zip(&analysis.frames)
-            .map(|(f, a)| {
-                let &[roll, yaw, pitch] =
-                    (a.proposed_rotation_euler_angles * learning_rate).as_ref();
-                Frame {
-                    orientation: UnitQuaternion::from_euler_angles(roll, yaw, pitch)
-                        * f.orientation,
-                    center_of_mass: &f.center_of_mass + a.proposed_translation * learning_rate,
-                    camera_landmarks: f.camera_landmarks.clone(),
-                    ..*f
-                }
+            .map(|(f, a)| Frame {
+                orientation: rotation_quaternion(a.proposed_rotation * learning_rate)
+                    * f.orientation,
+                center_of_mass: &f.center_of_mass + a.proposed_translation * learning_rate,
+                camera_landmarks: f.camera_landmarks.clone(),
+                ..*f
             })
             .collect(),
         landmark_offsets: &model.landmark_offsets
@@ -422,6 +416,11 @@ fn descend(
         camera_fov_slope: &model.camera_fov_slope
             + &analysis.proposed_fov_slope_change * learning_rate,
     }
+}
+
+fn rotation_quaternion(amounts: Vector3<f64>) -> UnitQuaternion<f64> {
+    let norm = amounts.norm();
+    UnitQuaternion::from_axis_angle(&Unit::new_unchecked(amounts / norm), norm)
 }
 
 fn optimal_learning_rate(model: &FacePositionModel, analysis: &FacePositionModelAnalysis) -> f64 {
@@ -441,9 +440,7 @@ fn optimal_learning_rate(model: &FacePositionModel, analysis: &FacePositionModel
             + zip(&analysis.frames, &mid_analysis.frames)
                 .map(|(first, second)| {
                     first.proposed_translation.dot(&second.d_loss_d_translation)
-                        + first
-                            .proposed_rotation_euler_angles
-                            .dot(&second.d_loss_d_rotation)
+                        + first.proposed_rotation.dot(&second.d_loss_d_rotation)
                 })
                 .sum::<f64>());
         if mid_analysis.loss < min_analysis.loss && agreement > 0.0 {
@@ -464,9 +461,8 @@ fn descend_last_frame(
     let (f, rest) = model.frames.split_last().unwrap();
     let a = analysis.frames.last().unwrap();
     let new_last = {
-        let &[roll, yaw, pitch] = (a.proposed_rotation_euler_angles * learning_rate).as_ref();
         Frame {
-            orientation: UnitQuaternion::from_euler_angles(roll, yaw, pitch) * f.orientation,
+            orientation: rotation_quaternion(a.proposed_rotation * learning_rate) * f.orientation,
             center_of_mass: &f.center_of_mass + a.proposed_translation * learning_rate,
             camera_landmarks: f.camera_landmarks.clone(),
             ..*f
@@ -493,7 +489,7 @@ fn proposed_descent_kind_magnitudes(analysis: &FacePositionModelAnalysis) -> [f6
     let rotation = analysis
         .frames
         .iter()
-        .map(|frame| frame.proposed_rotation_euler_angles.norm_squared())
+        .map(|frame| frame.proposed_rotation.norm_squared())
         .sum::<f64>()
         .sqrt();
     let reshaping = analysis.proposed_landmark_offsets_change.norm();
