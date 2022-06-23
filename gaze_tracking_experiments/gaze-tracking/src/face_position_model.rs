@@ -190,8 +190,8 @@ impl FacePositionModel {
                 loss: frame_loss,
                 d_loss_d_translation,
                 d_loss_d_rotation,
-                proposed_translation: -d_loss_d_translation, //.component_div(&d2_loss_d_translation2),
-                proposed_rotation_euler_angles: -d_loss_d_rotation, //.component_div(&d2_loss_d_rotation2),
+                proposed_translation: -d_loss_d_translation * 0.25, //.component_div(&d2_loss_d_translation2),
+                proposed_rotation_euler_angles: -d_loss_d_rotation * 4.0, //.component_div(&d2_loss_d_rotation2),
             });
         }
         //assert!(d2_loss_d_landmark_offsets2.iter().all(|&v| v >= 0.0));
@@ -201,7 +201,7 @@ impl FacePositionModel {
         for mut column in d_loss_d_landmark_offsets.column_iter_mut() {
             column -= d_loss_d_landmark_offsets_mean;
         }
-        let proposed_landmark_offsets_change = -&d_loss_d_landmark_offsets;
+        let proposed_landmark_offsets_change = -&d_loss_d_landmark_offsets * 2.0;
         // let proposed_landmark_offsets_change = matrix_from_column_iter(
         //     d_loss_d_landmark_offsets
         //         .column_iter()
@@ -267,10 +267,9 @@ impl FacePositionModel {
                         proposed_descent_kind_magnitudes(&analysis).as_slice(),
                     );
                     if self.frames.last().unwrap().time_index < 110 {
-                        utils::report(
-                            "optimal_learning_rate",
-                            optimal_learning_rate(self, &analysis),
-                        );
+                        let olr = optimal_learning_rate(self, &analysis);
+                        utils::report("optimal_learning_rate", olr);
+                        learning_rate = olr * 0.9;
                     }
                 }
                 //println!("{iteration}: {}", current.loss);
@@ -292,7 +291,22 @@ impl FacePositionModel {
                 let new_analysis = new.analyze(last_frame_only);
                 let observed_d_loss = new_analysis.loss - analysis.loss;
                 let observed_d_loss_d_learning = observed_d_loss / learning_rate;
-                if observed_d_loss_d_learning * 2.0 <= infinitesimal_d_loss_d_learning {
+                if do_reports {
+                    utils::report(
+                        "observed_learning_ratio",
+                        observed_d_loss_d_learning / infinitesimal_d_loss_d_learning,
+                    );
+                }
+                // if iteration > 1000 {
+                //     panic!("Hit some sort of pathological case at iteration {iteration}: {observed_d_loss}, {learning_rate}, {infinitesimal_d_loss_d_learning}");
+                // }
+                if observed_d_loss_d_learning > infinitesimal_d_loss_d_learning * 0.5 {
+                    learning_rate /= 2.0;
+                    if learning_rate < 1.0e-100 {
+                        panic!("Hit some sort of pathological case at iteration {iteration}: {observed_d_loss_d_learning}, {infinitesimal_d_loss_d_learning}");
+                    }
+                    //assert!(self.learning_rate > 0.000000001);
+                } else {
                     learning_rate *= 1.1;
                     if observed_d_loss > -0.00000001 * self.landmark_offsets.len() as f64 {
                         println!(
@@ -306,12 +320,6 @@ impl FacePositionModel {
                         }
                         break;
                     }
-                } else {
-                    learning_rate /= 2.0;
-                    if learning_rate < 1.0e-100 {
-                        panic!("Hit some sort of pathological case at iteration {iteration}");
-                    }
-                    //assert!(self.learning_rate > 0.000000001);
                 }
                 if new_analysis.loss < analysis.loss {
                     *self = new;
@@ -424,20 +432,20 @@ fn optimal_learning_rate(model: &FacePositionModel, analysis: &FacePositionModel
         let mid = (max + min) / 2.0;
         let mid_model = descend(model, analysis, mid);
         let mid_analysis = mid_model.analyze(false);
-        let agreement = analysis
+        let agreement = -(analysis
             .proposed_landmark_offsets_change
-            .dot(&mid_analysis.proposed_landmark_offsets_change)
+            .dot(&mid_analysis.d_loss_d_landmark_offsets)
             + analysis
                 .proposed_fov_slope_change
-                .dot(&mid_analysis.proposed_fov_slope_change)
+                .dot(&mid_analysis.d_loss_d_fov_slope)
             + zip(&analysis.frames, &mid_analysis.frames)
                 .map(|(first, second)| {
-                    first.proposed_translation.dot(&second.proposed_translation)
+                    first.proposed_translation.dot(&second.d_loss_d_translation)
                         + first
                             .proposed_rotation_euler_angles
-                            .dot(&second.proposed_rotation_euler_angles)
+                            .dot(&second.d_loss_d_rotation)
                 })
-                .sum::<f64>();
+                .sum::<f64>());
         if mid_analysis.loss < min_analysis.loss && agreement > 0.0 {
             min = mid;
             min_analysis = mid_analysis;

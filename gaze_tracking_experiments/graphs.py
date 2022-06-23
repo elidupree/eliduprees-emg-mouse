@@ -15,6 +15,9 @@ print(f"plotting {len(frames)} frames")
 for frame in frames:
     ax.plot([iteration["learning_rate"] for iteration in frame["iterations"]])
     ax.plot([iteration["optimal_learning_rate"] for iteration in frame["iterations"]])
+    ax.plot([iteration["observed_learning_ratio"] for iteration in frame["iterations"]])
+
+    # ax.plot([iteration["loss"] for iteration in frame["iterations"]])
     for descent_kind_index, color in enumerate(["red", "green", "blue", "purple"]):
         ax.plot(
             [iteration["proposed_descent_kind_magnitudes"][descent_kind_index] for iteration in frame["iterations"]],
