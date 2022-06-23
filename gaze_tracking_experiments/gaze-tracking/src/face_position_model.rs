@@ -13,6 +13,7 @@ struct Frame {
     orientation: UnitQuaternion<f64>,
 }
 
+#[derive(Clone)]
 pub struct FacePositionModel {
     frames: Vec<Frame>,
     landmark_offsets: Matrix3xX<f64>,
@@ -22,6 +23,7 @@ pub struct FacePositionModel {
     camera_fov_slope: Vector2<f64>,
 }
 
+#[derive(Clone)]
 struct FrameAnalysis {
     loss: f64,
     d_loss_d_translation: Vector3<f64>,
@@ -30,6 +32,7 @@ struct FrameAnalysis {
     proposed_rotation_euler_angles: Vector3<f64>,
 }
 
+#[derive(Clone)]
 struct FacePositionModelAnalysis {
     frames: Vec<FrameAnalysis>,
     loss: f64,
@@ -263,6 +266,12 @@ impl FacePositionModel {
                         "proposed_descent_kind_magnitudes",
                         proposed_descent_kind_magnitudes(&analysis).as_slice(),
                     );
+                    if self.frames.last().unwrap().time_index < 110 {
+                        utils::report(
+                            "optimal_learning_rate",
+                            optimal_learning_rate(self, &analysis),
+                        );
+                    }
                 }
                 //println!("{iteration}: {}", current.loss);
                 // translation.apply(self, &mut analysis);
@@ -405,6 +414,38 @@ fn descend(
         camera_fov_slope: &model.camera_fov_slope
             + &analysis.proposed_fov_slope_change * learning_rate,
     }
+}
+
+fn optimal_learning_rate(model: &FacePositionModel, analysis: &FacePositionModelAnalysis) -> f64 {
+    let mut min = 0.0;
+    let mut max = 100.0;
+    let mut min_analysis = analysis.clone();
+    while (max - min) > 0.0001 {
+        let mid = (max + min) / 2.0;
+        let mid_model = descend(model, analysis, mid);
+        let mid_analysis = mid_model.analyze(false);
+        let agreement = analysis
+            .proposed_landmark_offsets_change
+            .dot(&mid_analysis.proposed_landmark_offsets_change)
+            + analysis
+                .proposed_fov_slope_change
+                .dot(&mid_analysis.proposed_fov_slope_change)
+            + zip(&analysis.frames, &mid_analysis.frames)
+                .map(|(first, second)| {
+                    first.proposed_translation.dot(&second.proposed_translation)
+                        + first
+                            .proposed_rotation_euler_angles
+                            .dot(&second.proposed_rotation_euler_angles)
+                })
+                .sum::<f64>();
+        if mid_analysis.loss < min_analysis.loss && agreement > 0.0 {
+            min = mid;
+            min_analysis = mid_analysis;
+        } else {
+            max = mid;
+        }
+    }
+    min
 }
 
 fn descend_last_frame(
