@@ -420,7 +420,11 @@ fn descend(
 
 fn rotation_quaternion(amounts: Vector3<f64>) -> UnitQuaternion<f64> {
     let norm = amounts.norm();
-    UnitQuaternion::from_axis_angle(&Unit::new_unchecked(amounts / norm), norm)
+    if norm == 0.0 {
+        UnitQuaternion::identity()
+    } else {
+        UnitQuaternion::from_axis_angle(&Unit::new_unchecked(amounts / norm), norm)
+    }
 }
 
 fn optimal_learning_rate(model: &FacePositionModel, analysis: &FacePositionModelAnalysis) -> f64 {
