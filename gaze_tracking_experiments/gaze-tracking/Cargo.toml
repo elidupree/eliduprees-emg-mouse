@@ -11,6 +11,7 @@ nalgebra = { version = "*", features = ["serde-serialize"] }
 serde = { version = "1.0.137", features = ["rc"] }
 serde_json = "1.0.81"
 kiss3d = "0.34.0"
+rand = "0.8.5"
 
 [profile.dev]
 opt-level = 3

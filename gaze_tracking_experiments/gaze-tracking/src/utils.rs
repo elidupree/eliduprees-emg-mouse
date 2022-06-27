@@ -52,44 +52,58 @@ struct Reports {
     frames: Vec<FrameReport>,
 }
 
-thread_local! {static REPORTS: RefCell<Reports>=RefCell:: default()}
+thread_local! {static REPORTS: RefCell<Option<Reports>>=RefCell:: default()}
+
+pub fn start_recording_reports() {
+    REPORTS.with(|reports| {
+        *reports.borrow_mut() = Some(Reports::default());
+    });
+}
 
 pub fn report_frame_started() {
-    REPORTS.with(|reports| reports.borrow_mut().frames.push(FrameReport::default()));
+    REPORTS.with(|reports| {
+        if let Some(reports) = &mut *reports.borrow_mut() {
+            reports.frames.push(FrameReport::default())
+        }
+    });
 }
 
 pub fn report_iteration_started() {
     REPORTS.with(|reports| {
-        reports
-            .borrow_mut()
-            .frames
-            .last_mut()
-            .unwrap()
-            .iterations
-            .push(serde_json::Map::default());
+        if let Some(reports) = &mut *reports.borrow_mut() {
+            reports
+                .frames
+                .last_mut()
+                .unwrap()
+                .iterations
+                .push(serde_json::Map::default());
+        }
     });
 }
 
 pub fn report(key: &str, value: impl Into<serde_json::Value>) {
     REPORTS.with(|reports| {
-        reports
-            .borrow_mut()
-            .frames
-            .last_mut()
-            .unwrap()
-            .iterations
-            .last_mut()
-            .unwrap()
-            .insert(key.to_string(), value.into());
+        if let Some(reports) = &mut *reports.borrow_mut() {
+            reports
+                .frames
+                .last_mut()
+                .unwrap()
+                .iterations
+                .last_mut()
+                .unwrap()
+                .insert(key.to_string(), value.into());
+        }
     });
 }
 
 pub fn save_reports() {
     REPORTS.with(|reports| {
-        serde_json::to_writer(
-            BufWriter::new(std::fs::File::create("../reports.json").unwrap()),
-            &*reports.borrow(),
-        )
-        .unwrap();
+        if let Some(reports) = &*reports.borrow() {
+            serde_json::to_writer(
+                BufWriter::new(std::fs::File::create("../reports.json").unwrap()),
+                &*reports,
+            )
+            .unwrap();
+        }
     });
 }

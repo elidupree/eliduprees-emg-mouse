@@ -2,6 +2,7 @@ use crate::utils;
 use crate::utils::{matrix_from_column_iter, Vector3Ext};
 use kiss3d::window::Window;
 use nalgebra::{Matrix2xX, Matrix3xX, Unit, UnitQuaternion, Vector2, Vector3, VectorSlice3};
+use rand::prelude::*;
 use std::iter::zip;
 use std::sync::Arc;
 
@@ -43,6 +44,41 @@ struct FacePositionModelAnalysis {
     d_loss_d_learning: f64,
 }
 
+#[derive(Clone, Debug)]
+pub struct MetaParameters {
+    translation_rate: f64,
+    rotation_rate: f64,
+    reshaping_rate: f64,
+    fov_tweak_rate: f64,
+    learning_smoothness_threshold: f64,
+    learning_increase_factor: f64,
+    learning_decrease_factor: f64,
+}
+
+impl MetaParameters {
+    pub fn new() -> Self {
+        MetaParameters {
+            translation_rate: 0.25,
+            rotation_rate: 4.0,
+            reshaping_rate: 2.0,
+            fov_tweak_rate: 1.0,
+            learning_smoothness_threshold: 0.5,
+            learning_increase_factor: 2.0,
+            learning_decrease_factor: 0.5,
+        }
+    }
+
+    pub fn mutate(&self, rate: f64) -> Self {
+        let mut rng = rand::thread_rng();
+        let mut result = self.clone();
+        result.translation_rate *= rng.gen_range(-rate..=rate).exp();
+        result.rotation_rate *= rng.gen_range(-rate..=rate).exp();
+        result.reshaping_rate *= rng.gen_range(-rate..=rate).exp();
+        result.fov_tweak_rate *= rng.gen_range(-rate..=rate).exp();
+        result
+    }
+}
+
 impl Frame {
     fn rotated_offset(&self, offset: VectorSlice3<f64>) -> Vector3<f64> {
         self.orientation * offset
@@ -60,7 +96,7 @@ pub struct AddFrameResults {
 const ROTATION_DIMENSIONS: [[usize; 3]; 3] = [[0, 1, 2], [1, 2, 0], [2, 0, 1]];
 
 impl FacePositionModel {
-    pub fn default_from_camera(camera_landmarks: Matrix2xX<f64>) -> Self {
+    pub fn default_from_camera(camera_landmarks: Arc<Matrix2xX<f64>>) -> Self {
         let mean = camera_landmarks.column_mean();
         let landmark_offsets = matrix_from_column_iter(
             camera_landmarks
@@ -70,7 +106,7 @@ impl FacePositionModel {
         FacePositionModel {
             frames: vec![Frame {
                 time_index: 0,
-                camera_landmarks: Arc::new(camera_landmarks),
+                camera_landmarks,
                 center_of_mass: Vector3::new(0.0, 0.0, 1.0),
                 orientation: UnitQuaternion::identity(),
             }],
@@ -79,7 +115,11 @@ impl FacePositionModel {
         }
     }
 
-    fn analyze(&self, last_frame_only: bool) -> FacePositionModelAnalysis {
+    fn analyze(
+        &self,
+        parameters: &MetaParameters,
+        last_frame_only: bool,
+    ) -> FacePositionModelAnalysis {
         let mut loss = 0.0;
         let mut d_loss_d_fov_slope = Vector2::new(0.0, 0.0);
         // let mut d2_loss_d_fov_slope2 = Vector2::new(0.0, 0.0);
@@ -190,8 +230,8 @@ impl FacePositionModel {
                 loss: frame_loss,
                 d_loss_d_translation,
                 d_loss_d_rotation,
-                proposed_translation: -d_loss_d_translation * 0.25, //.component_div(&d2_loss_d_translation2),
-                proposed_rotation: -d_loss_d_rotation * 4.0, //.component_div(&d2_loss_d_rotation2),
+                proposed_translation: -d_loss_d_translation * parameters.translation_rate, //.component_div(&d2_loss_d_translation2),
+                proposed_rotation: -d_loss_d_rotation * parameters.rotation_rate, //.component_div(&d2_loss_d_rotation2),
             });
         }
         //assert!(d2_loss_d_landmark_offsets2.iter().all(|&v| v >= 0.0));
@@ -201,7 +241,8 @@ impl FacePositionModel {
         for mut column in d_loss_d_landmark_offsets.column_iter_mut() {
             column -= d_loss_d_landmark_offsets_mean;
         }
-        let proposed_landmark_offsets_change = -&d_loss_d_landmark_offsets * 2.0;
+        let proposed_landmark_offsets_change =
+            -&d_loss_d_landmark_offsets * parameters.reshaping_rate;
         // let proposed_landmark_offsets_change = matrix_from_column_iter(
         //     d_loss_d_landmark_offsets
         //         .column_iter()
@@ -211,7 +252,7 @@ impl FacePositionModel {
         //             //.component_div(&d2_loss_d_landmark_offset2)
         //         }),
         // );
-        let proposed_fov_slope_change = -d_loss_d_fov_slope; //.component_div(&d2_loss_d_fov_slope2),
+        let proposed_fov_slope_change = -d_loss_d_fov_slope * parameters.fov_tweak_rate; //.component_div(&d2_loss_d_fov_slope2),
 
         let mut d_loss_d_learning = frames
             .iter()
@@ -235,22 +276,27 @@ impl FacePositionModel {
         }
     }
 
-    pub fn add_frame(&mut self, camera_landmarks: Matrix2xX<f64>) -> AddFrameResults {
+    pub fn add_frame(
+        &mut self,
+        parameters: &MetaParameters,
+        camera_landmarks: Arc<Matrix2xX<f64>>,
+    ) -> AddFrameResults {
         utils::report_frame_started();
         let last_frame = self.frames.last().unwrap();
         let new_frame = Frame {
             time_index: last_frame.time_index + 1,
-            camera_landmarks: Arc::new(camera_landmarks),
+            camera_landmarks,
             ..*last_frame
         };
         self.frames.push(new_frame);
-        let mut analysis = self.analyze(false);
+        let mut analysis = self.analyze(parameters, false);
         // let mut translation = ChangeRunner::new(descend_by_translation);
         // let mut rotation = ChangeRunner::new(descend_by_rotation);
         // let mut reshaping = ChangeRunner::new(descend_by_reshaping);
         // let mut tweaking_fov = ChangeRunner::new(descend_by_tweaking_fov);
         let mut learning_rate;
         let mut iteration = 0;
+        let mut slow_descends = 0;
         for last_frame_only in [true, false] {
             learning_rate = 0.01;
             iteration = 0;
@@ -264,11 +310,11 @@ impl FacePositionModel {
                         "proposed_descent_kind_magnitudes",
                         proposed_descent_kind_magnitudes(&analysis).as_slice(),
                     );
-                    if self.frames.last().unwrap().time_index < 110 {
-                        let olr = optimal_learning_rate(self, &analysis);
-                        utils::report("optimal_learning_rate", olr);
-                        learning_rate = olr * 0.9;
-                    }
+                    // if self.frames.last().unwrap().time_index < 110 {
+                    //     let olr = optimal_learning_rate(parameters, self, &analysis);
+                    //     utils::report("optimal_learning_rate", olr);
+                    //     learning_rate = olr * 0.9;
+                    // }
                 }
                 //println!("{iteration}: {}", current.loss);
                 // translation.apply(self, &mut analysis);
@@ -286,7 +332,7 @@ impl FacePositionModel {
                 } else {
                     descend(&self, &analysis, learning_rate)
                 };
-                let new_analysis = new.analyze(last_frame_only);
+                let new_analysis = new.analyze(parameters, last_frame_only);
                 let observed_d_loss = new_analysis.loss - analysis.loss;
                 let observed_d_loss_d_learning = observed_d_loss / learning_rate;
                 if do_reports {
@@ -298,26 +344,35 @@ impl FacePositionModel {
                 // if iteration > 1000 {
                 //     panic!("Hit some sort of pathological case at iteration {iteration}: {observed_d_loss}, {learning_rate}, {infinitesimal_d_loss_d_learning}");
                 // }
-                if observed_d_loss_d_learning > infinitesimal_d_loss_d_learning * 0.5 {
-                    learning_rate /= 2.0;
+                if observed_d_loss_d_learning
+                    > infinitesimal_d_loss_d_learning * parameters.learning_smoothness_threshold
+                {
+                    learning_rate *= parameters.learning_decrease_factor;
                     if learning_rate < 1.0e-100 {
                         panic!("Hit some sort of pathological case at iteration {iteration}: {observed_d_loss_d_learning}, {infinitesimal_d_loss_d_learning}");
                     }
                     //assert!(self.learning_rate > 0.000000001);
                 } else {
-                    learning_rate *= 1.1;
-                    if observed_d_loss > -0.00000001 * self.landmark_offsets.len() as f64 {
-                        println!(
-                            "Good enough at iteration {iteration}; learning_rate is {learning_rate}"
-                        );
+                    learning_rate *= parameters.learning_increase_factor;
+                }
+                if observed_d_loss <= 0.0
+                    && observed_d_loss > -0.00000001 * self.landmark_offsets.len() as f64
+                {
+                    slow_descends += 1;
+                    if slow_descends > 2 {
+                        // println!(
+                        //     "Good enough at iteration {iteration}; learning_rate is {learning_rate}"
+                        // );
                         *self = new;
                         if last_frame_only {
-                            analysis = self.analyze(false);
+                            analysis = self.analyze(parameters, false);
                         } else {
                             analysis = new_analysis;
                         }
                         break;
                     }
+                } else {
+                    slow_descends = 0;
                 }
                 if new_analysis.loss < analysis.loss {
                     *self = new;
@@ -427,14 +482,18 @@ fn rotation_quaternion(amounts: Vector3<f64>) -> UnitQuaternion<f64> {
     }
 }
 
-fn optimal_learning_rate(model: &FacePositionModel, analysis: &FacePositionModelAnalysis) -> f64 {
+fn optimal_learning_rate(
+    parameters: &MetaParameters,
+    model: &FacePositionModel,
+    analysis: &FacePositionModelAnalysis,
+) -> f64 {
     let mut min = 0.0;
     let mut max = 100.0;
     let mut min_analysis = analysis.clone();
     while (max - min) > 0.0001 {
         let mid = (max + min) / 2.0;
         let mid_model = descend(model, analysis, mid);
-        let mid_analysis = mid_model.analyze(false);
+        let mid_analysis = mid_model.analyze(parameters, false);
         let agreement = -(analysis
             .proposed_landmark_offsets_change
             .dot(&mid_analysis.d_loss_d_landmark_offsets)
