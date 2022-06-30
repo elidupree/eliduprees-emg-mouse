@@ -72,8 +72,9 @@ def face_loop():
 
             if results.multi_face_landmarks:
                 landmarks = [[p.x - 0.5, p.y - 0.5] for p in results.multi_face_landmarks[0].landmark]
-                json.dump(landmarks, sys.stdout)
-                print()
+                # json.dump(landmarks, sys.stdout)
+                # print()
+
                 # landmarks = np.array([[p.x - 0.5, p.y - 0.5] for p in results.multi_face_landmarks[0].landmark])
                 # landmarks = landmarks[[4, 152, 263, 33, 287, 57]]
                 # if current_parameters is None:
@@ -125,7 +126,7 @@ def face_loop():
             queue.append(image)
 
             eprint(f"FPS: {frames / (datetime.now() - start).total_seconds():.1f}")
-            if len(queue) == 60:
+            if len(queue) == 1:  # 60:
                 cv2.imshow('MediaPipe Face Mesh', cv2.flip(queue.popleft(), 1))
             if cv2.waitKey(2) & 0xFF == 27:
                 break

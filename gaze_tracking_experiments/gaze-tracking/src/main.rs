@@ -35,6 +35,7 @@ fn run(
             ));
         }
         window.render();
+        //std::thread::sleep(std::time::Duration::from_millis(500));
     }
     println!("Totals: {total_loss}, {total_iterations}");
     (total_loss, total_iterations)
@@ -60,29 +61,31 @@ fn main() {
         .collect();
     let mut window = Window::new("EliDupree's EMG Mouse Gaze Tracker Viz");
 
-    //utils::start_recording_reports();
-    // run(&mut window, &all_camera_landmarks, &MetaParameters::new());
-    //utils::save_reports();
-
-    let start = Instant::now();
-    let mut parameters = MetaParameters::new();
-    let mut best_score = 999999999999999999.0;
-    let num_runs = 100;
-    for run_index in 0..num_runs {
-        let new_parameters = if run_index == 0 {
-            parameters.clone()
-        } else {
-            parameters.mutate(1.0 - (run_index as f64 / num_runs as f64))
-        };
-        let elapsed = start.elapsed();
-        println!("Starting run {run_index} at {elapsed:?}, trying {new_parameters:?}");
-        let (total_loss, total_iterations) =
-            run(&mut window, &all_camera_landmarks, &new_parameters);
-        let score = total_loss + total_iterations as f64 / 10_000.0;
-        if score < best_score {
-            best_score = score;
-            parameters = new_parameters;
-            println!("Improved!");
+    if true {
+        utils::start_recording_reports();
+        run(&mut window, &all_camera_landmarks, &MetaParameters::new());
+        utils::save_reports();
+    } else {
+        let start = Instant::now();
+        let mut parameters = MetaParameters::new();
+        let mut best_score = 999999999999999999.0;
+        let num_runs = 100;
+        for run_index in 0..num_runs {
+            let new_parameters = if run_index == 0 {
+                parameters.clone()
+            } else {
+                parameters.mutate(1.0 - (run_index as f64 / num_runs as f64))
+            };
+            let elapsed = start.elapsed();
+            println!("Starting run {run_index} at {elapsed:?}, trying {new_parameters:?}");
+            let (total_loss, total_iterations) =
+                run(&mut window, &all_camera_landmarks, &new_parameters);
+            let score = total_loss + total_iterations as f64 / 1_000.0;
+            if score < best_score {
+                best_score = score;
+                parameters = new_parameters;
+                println!("Improved!");
+            }
         }
     }
 }

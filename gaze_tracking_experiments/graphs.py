@@ -14,7 +14,8 @@ print(f"plotting {len(frames)} frames")
 
 for frame in frames:
     ax.plot([iteration["learning_rate"] for iteration in frame["iterations"]])
-    ax.plot([iteration["optimal_learning_rate"] for iteration in frame["iterations"]])
+    if "optimal_learning_rate" in frame["iterations"][0]:
+        ax.plot([iteration["optimal_learning_rate"] for iteration in frame["iterations"]])
     ax.plot([iteration["observed_learning_ratio"] for iteration in frame["iterations"]])
 
     # ax.plot([iteration["loss"] for iteration in frame["iterations"]])

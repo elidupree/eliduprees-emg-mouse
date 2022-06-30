@@ -1,7 +1,9 @@
 use crate::utils;
 use crate::utils::{matrix_from_column_iter, Vector3Ext};
 use kiss3d::window::Window;
-use nalgebra::{Matrix2xX, Matrix3xX, Unit, UnitQuaternion, Vector2, Vector3, VectorSlice3};
+use nalgebra::{
+    DVector, Matrix2xX, Matrix3xX, Unit, UnitQuaternion, Vector2, Vector3, VectorSlice3,
+};
 use rand::prelude::*;
 use std::iter::zip;
 use std::sync::Arc;
@@ -36,6 +38,7 @@ struct FrameAnalysis {
 #[derive(Clone)]
 struct FacePositionModelAnalysis {
     frames: Vec<FrameAnalysis>,
+    landmark_loss: DVector<f64>,
     loss: f64,
     d_loss_d_fov_slope: Vector2<f64>,
     d_loss_d_landmark_offsets: Matrix3xX<f64>,
@@ -50,21 +53,47 @@ pub struct MetaParameters {
     rotation_rate: f64,
     reshaping_rate: f64,
     fov_tweak_rate: f64,
+    learning_smoothness_threshold_logistic_input: f64,
     learning_smoothness_threshold: f64,
     learning_increase_factor: f64,
+    learning_decrease_factor_logistic_input: f64,
     learning_decrease_factor: f64,
 }
 
 impl MetaParameters {
     pub fn new() -> Self {
         MetaParameters {
-            translation_rate: 0.25,
-            rotation_rate: 4.0,
-            reshaping_rate: 2.0,
-            fov_tweak_rate: 1.0,
+            translation_rate: 0.307,
+            rotation_rate: 2.018,
+            reshaping_rate: 1.542,
+            fov_tweak_rate: 0.947,
+            learning_smoothness_threshold_logistic_input: 0.0,
             learning_smoothness_threshold: 0.5,
             learning_increase_factor: 2.0,
+            learning_decrease_factor_logistic_input: 0.0,
             learning_decrease_factor: 0.5,
+        };
+        MetaParameters {
+            translation_rate: 0.2779278249261501,
+            rotation_rate: 10.370492557651998,
+            reshaping_rate: 1.3090546815318604,
+            fov_tweak_rate: 1.2058344227743527,
+            learning_smoothness_threshold_logistic_input: 0.8224878187339855,
+            learning_smoothness_threshold: 0.8382108367011485,
+            learning_increase_factor: 1.2646115090985655,
+            learning_decrease_factor_logistic_input: -1.3916990906260678,
+            learning_decrease_factor: 0.05822792800439669,
+        };
+        MetaParameters {
+            translation_rate: 0.2699628982930168,
+            rotation_rate: 6.783023480987058,
+            reshaping_rate: 0.8420502936726204,
+            fov_tweak_rate: 1.1388770853946732,
+            learning_smoothness_threshold_logistic_input: 0.590058302151147,
+            learning_smoothness_threshold: 0.7649687688799127,
+            learning_increase_factor: 1.4423928518524542,
+            learning_decrease_factor_logistic_input: -1.1699894812150484,
+            learning_decrease_factor: 0.08786560087570966,
         }
     }
 
@@ -75,6 +104,14 @@ impl MetaParameters {
         result.rotation_rate *= rng.gen_range(-rate..=rate).exp();
         result.reshaping_rate *= rng.gen_range(-rate..=rate).exp();
         result.fov_tweak_rate *= rng.gen_range(-rate..=rate).exp();
+        result.learning_increase_factor =
+            1.0 + (result.learning_increase_factor - 1.0) * rng.gen_range(-rate..=rate).exp();
+        result.learning_smoothness_threshold_logistic_input += rng.gen_range(-rate..=rate);
+        result.learning_decrease_factor_logistic_input += rng.gen_range(-rate..=rate);
+        result.learning_smoothness_threshold =
+            0.5 * (result.learning_smoothness_threshold_logistic_input.tanh() + 1.0);
+        result.learning_decrease_factor =
+            0.5 * (result.learning_decrease_factor_logistic_input.tanh() + 1.0);
         result
     }
 }
@@ -124,6 +161,7 @@ impl FacePositionModel {
         let mut d_loss_d_fov_slope = Vector2::new(0.0, 0.0);
         // let mut d2_loss_d_fov_slope2 = Vector2::new(0.0, 0.0);
         let mut d_loss_d_landmark_offsets = Matrix3xX::zeros(self.landmark_offsets.ncols());
+        let mut landmark_loss = DVector::zeros(self.landmark_offsets.ncols());
         // let mut d2_loss_d_landmark_offsets2 = Matrix3xX::zeros(self.landmark_offsets.ncols());
         let mut frames = Vec::with_capacity(self.frames.len());
         let &[cfx, cfy] = self.camera_fov_slope.as_ref();
@@ -141,16 +179,20 @@ impl FacePositionModel {
             // let mut d2_loss_d_rotation2 = Vector3::new(0.0, 0.0, 0.0);
             for (
                 (camera_landmark, landmark_offset),
-                mut d_loss_d_landmark_offset, /* , mut d2_loss_d_landmark_offset2*/
+                (
+                    mut d_loss_d_landmark_offset,
+                    /* , mut d2_loss_d_landmark_offset2*/ landmark_loss,
+                ),
             ) in zip(
                 zip(
                     frame.camera_landmarks.column_iter(),
                     self.landmark_offsets.column_iter(),
                 ),
-                // zip(
-                d_loss_d_landmark_offsets.column_iter_mut(),
-                //     d2_loss_d_landmark_offsets2.column_iter_mut(),
-                // ),
+                zip(
+                    d_loss_d_landmark_offsets.column_iter_mut(),
+                    landmark_loss.iter_mut(),
+                    //     d2_loss_d_landmark_offsets2.column_iter_mut(),
+                ),
             ) {
                 let rotated_offset = frame.rotated_offset(landmark_offset);
                 let model_landmark = frame.center_of_mass + rotated_offset;
@@ -170,7 +212,9 @@ impl FacePositionModel {
                 let two_y_cfy_minus_z_cy_over_z2 = (y_cfy - z_cy) * two_over_z2;
 
                 // "loss is the square of the planar distance between expected and observed camera locations"
-                frame_loss += (x_cfx * recip_z - cx).powi(2) + (y_cfy * recip_z - cy).powi(2);
+                let loss = (x_cfx * recip_z - cx).powi(2) + (y_cfy * recip_z - cy).powi(2);
+                frame_loss += loss;
+                *landmark_loss += loss;
 
                 // derivatives of the above loss function
                 let d_loss_d_landmark_position = Vector3::new(
@@ -267,6 +311,7 @@ impl FacePositionModel {
         }
         FacePositionModelAnalysis {
             frames,
+            landmark_loss,
             loss,
             d_loss_d_fov_slope,
             d_loss_d_landmark_offsets,
@@ -420,6 +465,14 @@ impl FacePositionModel {
 
         let white = Point3::new(1.0, 1.0, 1.0);
         let red = Point3::new(0.5, 0.0, 0.0);
+        let analysis = self.analyze(&MetaParameters::new(), false);
+        let max_loss = analysis
+            .landmark_loss
+            .iter()
+            .copied()
+            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap();
+        let relative_loss = analysis.landmark_loss / max_loss;
 
         // camera box:
         let [x, y, z] = [
@@ -442,8 +495,16 @@ impl FacePositionModel {
                 window.draw_point(&frame.landmark_position(offset).to_kiss(), &red);
             }
         }
-        for offset in self.landmark_offsets.column_iter() {
-            window.draw_point(&last_frame.landmark_position(offset).to_kiss(), &white);
+        for (offset, &relative_loss) in zip(self.landmark_offsets.column_iter(), &relative_loss) {
+            let relative_loss = relative_loss as f32;
+            window.draw_point(
+                &last_frame.landmark_position(offset).to_kiss(),
+                &Point3::new(
+                    1.0 - relative_loss,
+                    1.0 - relative_loss,
+                    1.0 - relative_loss * 0.5,
+                ),
+            );
         }
     }
 }
