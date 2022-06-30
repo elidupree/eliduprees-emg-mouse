@@ -1,19 +1,51 @@
 use crate::utils;
-use crate::utils::{matrix_from_column_iter, Vector3Ext};
+use crate::utils::{matrix2_from_column_iter, matrix_from_column_iter, Vector3Ext};
+use itertools::multizip;
 use kiss3d::window::Window;
 use nalgebra::{
-    DVector, Matrix2xX, Matrix3xX, Unit, UnitQuaternion, Vector2, Vector3, VectorSlice3,
+    DVector, Matrix2, Matrix2xX, Matrix3x2, Matrix3xX, Unit, UnitQuaternion, UnitVector3, Vector2,
+    Vector3, VectorSlice3,
 };
 use rand::prelude::*;
 use std::iter::zip;
 use std::sync::Arc;
 
+pub struct CameraLandmarks {
+    pub regular_landmarks: Matrix2xX<f64>,
+    pub pupils: Matrix2<f64>,
+}
+
+const MEDIAPIPE_FACEMESH_LEFT_PUPIL_INDEX: usize = 468;
+const MEDIAPIPE_FACEMESH_RIGHT_PUPIL_INDEX: usize = 473;
+
+impl CameraLandmarks {
+    pub fn from_mediapipe_facemesh(landmarks: Vec<Vector2<f64>>) -> Self {
+        CameraLandmarks {
+            regular_landmarks: matrix2_from_column_iter(
+                landmarks
+                    .iter()
+                    .enumerate()
+                    .filter(|&(i, _)| {
+                        i != MEDIAPIPE_FACEMESH_LEFT_PUPIL_INDEX
+                            && i != MEDIAPIPE_FACEMESH_RIGHT_PUPIL_INDEX
+                    })
+                    .map(|(_i, &l)| l),
+            ),
+            pupils: Matrix2::from_columns(&[
+                landmarks[MEDIAPIPE_FACEMESH_LEFT_PUPIL_INDEX],
+                landmarks[MEDIAPIPE_FACEMESH_RIGHT_PUPIL_INDEX],
+            ]),
+        }
+    }
+}
+
 #[derive(Clone)]
 struct Frame {
     time_index: usize,
-    camera_landmarks: Arc<Matrix2xX<f64>>,
+    camera_landmarks: Arc<CameraLandmarks>,
     center_of_mass: Vector3<f64>,
     orientation: UnitQuaternion<f64>,
+    eye_directions: [UnitVector3<f64>; 2],
 }
 
 #[derive(Clone)]
@@ -24,6 +56,9 @@ pub struct FacePositionModel {
     /// the "spatial depth units per spatial horizontal unit" at 1.0 planar units away from camera center
     /// units are "spatial depth units" * "planar units" / "spatial horizontal units"
     camera_fov_slope: Vector2<f64>,
+
+    eye_center_offsets: Matrix3x2<f64>,
+    eye_radii: Vector2<f64>,
 }
 
 #[derive(Clone)]
@@ -31,8 +66,10 @@ struct FrameAnalysis {
     loss: f64,
     d_loss_d_translation: Vector3<f64>,
     d_loss_d_rotation: Vector3<f64>,
+    d_loss_d_eye_rotations: Matrix3x2<f64>,
     proposed_translation: Vector3<f64>,
     proposed_rotation: Vector3<f64>,
+    proposed_eye_rotations: Matrix3x2<f64>,
 }
 
 #[derive(Clone)]
@@ -42,8 +79,12 @@ struct FacePositionModelAnalysis {
     loss: f64,
     d_loss_d_fov_slope: Vector2<f64>,
     d_loss_d_landmark_offsets: Matrix3xX<f64>,
+    d_loss_d_eye_center_offsets: Matrix3x2<f64>,
+    d_loss_d_eye_radius_changes: Vector2<f64>,
     proposed_fov_slope_change: Vector2<f64>,
     proposed_landmark_offsets_change: Matrix3xX<f64>,
+    proposed_eye_center_offsets_change: Matrix3x2<f64>,
+    proposed_eye_radius_changes: Vector2<f64>,
     d_loss_d_learning: f64,
 }
 
@@ -51,8 +92,11 @@ struct FacePositionModelAnalysis {
 pub struct MetaParameters {
     translation_rate: f64,
     rotation_rate: f64,
+    eye_rotation_rate: f64,
     reshaping_rate: f64,
     fov_tweak_rate: f64,
+    eye_center_offsets_change_rate: f64,
+    eye_radius_change_rate: f64,
     learning_smoothness_threshold_logistic_input: f64,
     learning_smoothness_threshold: f64,
     learning_increase_factor: f64,
@@ -62,33 +106,36 @@ pub struct MetaParameters {
 
 impl MetaParameters {
     pub fn new() -> Self {
-        MetaParameters {
-            translation_rate: 0.307,
-            rotation_rate: 2.018,
-            reshaping_rate: 1.542,
-            fov_tweak_rate: 0.947,
-            learning_smoothness_threshold_logistic_input: 0.0,
-            learning_smoothness_threshold: 0.5,
-            learning_increase_factor: 2.0,
-            learning_decrease_factor_logistic_input: 0.0,
-            learning_decrease_factor: 0.5,
-        };
-        MetaParameters {
-            translation_rate: 0.2779278249261501,
-            rotation_rate: 10.370492557651998,
-            reshaping_rate: 1.3090546815318604,
-            fov_tweak_rate: 1.2058344227743527,
-            learning_smoothness_threshold_logistic_input: 0.8224878187339855,
-            learning_smoothness_threshold: 0.8382108367011485,
-            learning_increase_factor: 1.2646115090985655,
-            learning_decrease_factor_logistic_input: -1.3916990906260678,
-            learning_decrease_factor: 0.05822792800439669,
-        };
+        // MetaParameters {
+        //     translation_rate: 0.307,
+        //     rotation_rate: 2.018,
+        //     reshaping_rate: 1.542,
+        //     fov_tweak_rate: 0.947,
+        //     learning_smoothness_threshold_logistic_input: 0.0,
+        //     learning_smoothness_threshold: 0.5,
+        //     learning_increase_factor: 2.0,
+        //     learning_decrease_factor_logistic_input: 0.0,
+        //     learning_decrease_factor: 0.5,
+        // };
+        // MetaParameters {
+        //     translation_rate: 0.2779278249261501,
+        //     rotation_rate: 10.370492557651998,
+        //     reshaping_rate: 1.3090546815318604,
+        //     fov_tweak_rate: 1.2058344227743527,
+        //     learning_smoothness_threshold_logistic_input: 0.8224878187339855,
+        //     learning_smoothness_threshold: 0.8382108367011485,
+        //     learning_increase_factor: 1.2646115090985655,
+        //     learning_decrease_factor_logistic_input: -1.3916990906260678,
+        //     learning_decrease_factor: 0.05822792800439669,
+        // };
         MetaParameters {
             translation_rate: 0.2699628982930168,
             rotation_rate: 6.783023480987058,
+            eye_rotation_rate: 1.0,
             reshaping_rate: 0.8420502936726204,
             fov_tweak_rate: 1.1388770853946732,
+            eye_center_offsets_change_rate: 1.0,
+            eye_radius_change_rate: 1.0,
             learning_smoothness_threshold_logistic_input: 0.590058302151147,
             learning_smoothness_threshold: 0.7649687688799127,
             learning_increase_factor: 1.4423928518524542,
@@ -104,6 +151,9 @@ impl MetaParameters {
         result.rotation_rate *= rng.gen_range(-rate..=rate).exp();
         result.reshaping_rate *= rng.gen_range(-rate..=rate).exp();
         result.fov_tweak_rate *= rng.gen_range(-rate..=rate).exp();
+        result.eye_rotation_rate *= rng.gen_range(-rate..=rate).exp();
+        result.eye_center_offsets_change_rate *= rng.gen_range(-rate..=rate).exp();
+        result.eye_radius_change_rate *= rng.gen_range(-rate..=rate).exp();
         result.learning_increase_factor =
             1.0 + (result.learning_increase_factor - 1.0) * rng.gen_range(-rate..=rate).exp();
         result.learning_smoothness_threshold_logistic_input += rng.gen_range(-rate..=rate);
@@ -133,12 +183,23 @@ pub struct AddFrameResults {
 const ROTATION_DIMENSIONS: [[usize; 3]; 3] = [[0, 1, 2], [1, 2, 0], [2, 0, 1]];
 
 impl FacePositionModel {
-    pub fn default_from_camera(camera_landmarks: Arc<Matrix2xX<f64>>) -> Self {
-        let mean = camera_landmarks.column_mean();
+    pub fn default_from_camera(camera_landmarks: Arc<CameraLandmarks>) -> Self {
+        let mean = camera_landmarks.regular_landmarks.column_mean();
         let landmark_offsets = matrix_from_column_iter(
             camera_landmarks
+                .regular_landmarks
                 .column_iter()
-                .map(|v| Vector3::new(v[0] - mean[0], v[1] - mean[1], 0.0)),
+                .map(|v| v - mean)
+                .map(|v| Vector3::new(v[0], v[1], 0.0)),
+        );
+        let eye_radius = 0.05;
+        let eye_center_offsets = Matrix3x2::from_columns(
+            &camera_landmarks
+                .pupils
+                .column_iter()
+                .map(|v| v - mean)
+                .map(|v| Vector3::new(v[0], v[1], eye_radius))
+                .collect::<Vec<_>>(),
         );
         FacePositionModel {
             frames: vec![Frame {
@@ -146,9 +207,12 @@ impl FacePositionModel {
                 camera_landmarks,
                 center_of_mass: Vector3::new(0.0, 0.0, 1.0),
                 orientation: UnitQuaternion::identity(),
+                eye_directions: [Unit::new_unchecked(Vector3::new(0.0, 0.0, -1.0)); 2],
             }],
             landmark_offsets,
             camera_fov_slope: Vector2::new(1.0, 1.0),
+            eye_center_offsets,
+            eye_radii: Vector2::new(eye_radius, eye_radius),
         }
     }
 
@@ -161,6 +225,8 @@ impl FacePositionModel {
         let mut d_loss_d_fov_slope = Vector2::new(0.0, 0.0);
         // let mut d2_loss_d_fov_slope2 = Vector2::new(0.0, 0.0);
         let mut d_loss_d_landmark_offsets = Matrix3xX::zeros(self.landmark_offsets.ncols());
+        let mut d_loss_d_eye_center_offsets = Matrix3x2::zeros();
+        let mut d_loss_d_eye_radius_changes = Vector2::zeros();
         let mut landmark_loss = DVector::zeros(self.landmark_offsets.ncols());
         // let mut d2_loss_d_landmark_offsets2 = Matrix3xX::zeros(self.landmark_offsets.ncols());
         let mut frames = Vec::with_capacity(self.frames.len());
@@ -173,27 +239,24 @@ impl FacePositionModel {
         };
         for frame in &self.frames[start..] {
             let mut frame_loss = 0.0;
-            let mut d_loss_d_translation = Vector3::new(0.0, 0.0, 0.0);
+            let mut d_loss_d_translation = Vector3::zeros();
             // let mut d2_loss_d_translation2 = Vector3::new(0.0, 0.0, 0.0);
-            let mut d_loss_d_rotation = Vector3::new(0.0, 0.0, 0.0);
+            let mut d_loss_d_rotation = Vector3::zeros();
             // let mut d2_loss_d_rotation2 = Vector3::new(0.0, 0.0, 0.0);
+            let mut d_loss_d_eye_rotations = Matrix3x2::zeros();
             for (
-                (camera_landmark, landmark_offset),
-                (
-                    mut d_loss_d_landmark_offset,
-                    /* , mut d2_loss_d_landmark_offset2*/ landmark_loss,
-                ),
-            ) in zip(
-                zip(
-                    frame.camera_landmarks.column_iter(),
-                    self.landmark_offsets.column_iter(),
-                ),
-                zip(
-                    d_loss_d_landmark_offsets.column_iter_mut(),
-                    landmark_loss.iter_mut(),
-                    //     d2_loss_d_landmark_offsets2.column_iter_mut(),
-                ),
-            ) {
+                camera_landmark,
+                landmark_offset,
+                mut d_loss_d_landmark_offset,
+                //mut d2_loss_d_landmark_offset2,
+                landmark_loss,
+            ) in multizip((
+                frame.camera_landmarks.regular_landmarks.column_iter(),
+                self.landmark_offsets.column_iter(),
+                d_loss_d_landmark_offsets.column_iter_mut(),
+                landmark_loss.iter_mut(),
+                //     d2_loss_d_landmark_offsets2.column_iter_mut(),
+            )) {
                 let rotated_offset = frame.rotated_offset(landmark_offset);
                 let model_landmark = frame.center_of_mass + rotated_offset;
                 let &[x, y, z] = model_landmark.as_ref();
@@ -265,6 +328,84 @@ impl FacePositionModel {
                 }
             }
 
+            for (
+                camera_pupil,
+                eye_center_offset,
+                &eye_radius,
+                eye_direction,
+                mut d_loss_d_eye_center_offset,
+                d_loss_d_eye_radius_change,
+                mut d_loss_d_eye_rotation,
+            ) in multizip((
+                frame.camera_landmarks.pupils.column_iter(),
+                self.eye_center_offsets.column_iter(),
+                self.eye_radii.iter(),
+                &frame.eye_directions,
+                d_loss_d_eye_center_offsets.column_iter_mut(),
+                d_loss_d_eye_radius_changes.iter_mut(),
+                d_loss_d_eye_rotations.column_iter_mut(),
+            )) {
+                let rotated_eye_center_offset = frame.rotated_offset(eye_center_offset);
+                let center_to_pupil_offset = eye_direction.into_inner() * eye_radius;
+                let rotated_pupil_offset = rotated_eye_center_offset + center_to_pupil_offset;
+                let model_pupil = frame.center_of_mass + rotated_pupil_offset;
+
+                // TODO: reduce duplicate code with the above
+                let &[x, y, z] = model_pupil.as_ref();
+                let &[cx, cy] = camera_pupil.as_ref();
+
+                // optimizations (avoid duplicate work)
+                let recip_z = z.recip();
+                let two_over_z2 = 2.0 * recip_z * recip_z;
+                let two_over_z3 = two_over_z2 * recip_z;
+                // let four_over_z4 = two_over_z2 * two_over_z2;
+                let x_cfx = x * cfx;
+                let y_cfy = y * cfy;
+                let z_cx = z * cx;
+                let z_cy = z * cy;
+                let two_x_cfx_minus_z_cx_over_z2 = (x_cfx - z_cx) * two_over_z2;
+                let two_y_cfy_minus_z_cy_over_z2 = (y_cfy - z_cy) * two_over_z2;
+
+                // "loss is the square of the planar distance between expected and observed camera locations"
+                let loss = (x_cfx * recip_z - cx).powi(2) + (y_cfy * recip_z - cy).powi(2);
+                frame_loss += loss;
+
+                // derivatives of the above loss function
+                let d_loss_d_pupil_position = Vector3::new(
+                    cfx * two_x_cfx_minus_z_cx_over_z2,
+                    cfy * two_y_cfy_minus_z_cy_over_z2,
+                    ((z_cx - x_cfx) * x + ((z_cy - y_cfy) * y)) * two_over_z3,
+                );
+
+                d_loss_d_fov_slope += Vector2::new(
+                    x * two_x_cfx_minus_z_cx_over_z2,
+                    y * two_y_cfy_minus_z_cy_over_z2,
+                );
+
+                d_loss_d_eye_center_offset += frame.orientation.inverse() * d_loss_d_pupil_position;
+
+                d_loss_d_translation += d_loss_d_pupil_position;
+
+                *d_loss_d_eye_radius_change +=
+                    d_loss_d_pupil_position.dot(&eye_direction.into_inner());
+
+                for ([_axis, d1, d2], d_loss_d_rotation, d_loss_d_eye_rotation) in multizip((
+                    ROTATION_DIMENSIONS,
+                    &mut d_loss_d_rotation,
+                    &mut d_loss_d_eye_rotation,
+                )) {
+                    let u = rotated_pupil_offset[d1];
+                    let v = rotated_pupil_offset[d2];
+                    let dldu = d_loss_d_pupil_position[d1];
+                    let dldv = d_loss_d_pupil_position[d2];
+                    *d_loss_d_rotation += u * dldv - v * dldu;
+
+                    let u = center_to_pupil_offset[d1];
+                    let v = center_to_pupil_offset[d2];
+                    *d_loss_d_eye_rotation += u * dldv - v * dldu;
+                }
+            }
+
             loss += frame_loss;
 
             //assert!(d2_loss_d_translation2.iter().all(|&v| v >= 0.0));
@@ -274,8 +415,10 @@ impl FacePositionModel {
                 loss: frame_loss,
                 d_loss_d_translation,
                 d_loss_d_rotation,
+                d_loss_d_eye_rotations,
                 proposed_translation: -d_loss_d_translation * parameters.translation_rate, //.component_div(&d2_loss_d_translation2),
                 proposed_rotation: -d_loss_d_rotation * parameters.rotation_rate, //.component_div(&d2_loss_d_rotation2),
+                proposed_eye_rotations: -d_loss_d_eye_rotations * parameters.eye_rotation_rate,
             });
         }
         //assert!(d2_loss_d_landmark_offsets2.iter().all(|&v| v >= 0.0));
@@ -297,6 +440,10 @@ impl FacePositionModel {
         //         }),
         // );
         let proposed_fov_slope_change = -d_loss_d_fov_slope * parameters.fov_tweak_rate; //.component_div(&d2_loss_d_fov_slope2),
+        let proposed_eye_center_offsets_change =
+            -d_loss_d_eye_center_offsets * parameters.eye_center_offsets_change_rate;
+        let proposed_eye_radius_changes =
+            -d_loss_d_eye_radius_changes * parameters.eye_radius_change_rate;
 
         let mut d_loss_d_learning = frames
             .iter()
@@ -315,8 +462,12 @@ impl FacePositionModel {
             loss,
             d_loss_d_fov_slope,
             d_loss_d_landmark_offsets,
+            d_loss_d_eye_center_offsets,
+            d_loss_d_eye_radius_changes,
             proposed_fov_slope_change,
             proposed_landmark_offsets_change,
+            proposed_eye_center_offsets_change,
+            proposed_eye_radius_changes,
             d_loss_d_learning,
         }
     }
@@ -324,7 +475,7 @@ impl FacePositionModel {
     pub fn add_frame(
         &mut self,
         parameters: &MetaParameters,
-        camera_landmarks: Arc<Matrix2xX<f64>>,
+        camera_landmarks: Arc<CameraLandmarks>,
     ) -> AddFrameResults {
         utils::report_frame_started();
         let last_frame = self.frames.last().unwrap();
@@ -506,6 +657,23 @@ impl FacePositionModel {
                 ),
             );
         }
+        for ((offset, &radius), &direction) in zip(
+            zip(self.eye_center_offsets.column_iter(), self.eye_radii.iter()),
+            last_frame.eye_directions.iter(),
+        ) {
+            let center = last_frame.landmark_position(offset);
+            let pupil = center + direction.into_inner() * radius;
+            window.draw_line(
+                &center.to_kiss(),
+                &pupil.to_kiss(),
+                &Point3::new(0.0, 1.0, 0.0),
+            );
+            window.draw_line(
+                &pupil.to_kiss(),
+                &(pupil + direction.into_inner() * 1.0).to_kiss(),
+                &Point3::new(0.0, 0.5, 0.0),
+            );
+        }
     }
 }
 
@@ -524,6 +692,12 @@ fn descend(
                     * f.orientation,
                 center_of_mass: &f.center_of_mass + a.proposed_translation * learning_rate,
                 camera_landmarks: f.camera_landmarks.clone(),
+                eye_directions: std::array::from_fn(|i| {
+                    let r = rotation_quaternion(a.proposed_eye_rotations.column(i) * learning_rate);
+                    let mut d = r * f.eye_directions[i];
+                    d.renormalize_fast();
+                    d
+                }),
                 ..*f
             })
             .collect(),
@@ -531,6 +705,9 @@ fn descend(
             + &analysis.proposed_landmark_offsets_change * learning_rate,
         camera_fov_slope: &model.camera_fov_slope
             + &analysis.proposed_fov_slope_change * learning_rate,
+        eye_center_offsets: &model.eye_center_offsets
+            + &analysis.proposed_eye_center_offsets_change * learning_rate,
+        eye_radii: &model.eye_radii + &analysis.proposed_eye_radius_changes * learning_rate,
     }
 }
 
@@ -589,6 +766,12 @@ fn descend_last_frame(
             orientation: rotation_quaternion(a.proposed_rotation * learning_rate) * f.orientation,
             center_of_mass: &f.center_of_mass + a.proposed_translation * learning_rate,
             camera_landmarks: f.camera_landmarks.clone(),
+            eye_directions: std::array::from_fn(|i| {
+                let r = rotation_quaternion(a.proposed_eye_rotations.column(i) * learning_rate);
+                let mut d = r * f.eye_directions[i];
+                d.renormalize_fast();
+                d
+            }),
             ..*f
         }
     };
@@ -600,6 +783,8 @@ fn descend_last_frame(
             .collect(),
         landmark_offsets: model.landmark_offsets.clone(),
         camera_fov_slope: model.camera_fov_slope.clone(),
+        eye_center_offsets: model.eye_center_offsets.clone(),
+        eye_radii: model.eye_radii.clone(),
     }
 }
 

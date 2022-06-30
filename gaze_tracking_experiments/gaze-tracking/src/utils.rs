@@ -1,4 +1,4 @@
-use nalgebra::{Matrix3xX, Vector3};
+use nalgebra::{Matrix2xX, Matrix3xX, Vector2, Vector3};
 use serde::Serialize;
 use std::cell::RefCell;
 use std::io::BufWriter;
@@ -30,6 +30,10 @@ impl Vector3Ext for Vector3<f64> {
 
 pub fn matrix_from_column_iter(iter: impl IntoIterator<Item = Vector3<f64>>) -> Matrix3xX<f64> {
     Matrix3xX::from_columns(&iter.into_iter().collect::<Vec<_>>())
+}
+
+pub fn matrix2_from_column_iter(iter: impl IntoIterator<Item = Vector2<f64>>) -> Matrix2xX<f64> {
+    Matrix2xX::from_columns(&iter.into_iter().collect::<Vec<_>>())
 }
 
 pub fn ranks(iter: impl IntoIterator<Item = f64>) -> Vec<usize> {

@@ -1,9 +1,10 @@
-#![feature(array_zip)]
-#![feature(default_free_fn)]
+#![feature(array_zip, array_from_fn, default_free_fn)]
 
-use crate::face_position_model::{AddFrameResults, FacePositionModel, MetaParameters};
+use crate::face_position_model::{
+    AddFrameResults, CameraLandmarks, FacePositionModel, MetaParameters,
+};
 use kiss3d::window::Window;
-use nalgebra::{Matrix2xX, Vector2};
+use nalgebra::Vector2;
 use std::io::{BufRead, BufReader};
 use std::sync::Arc;
 use std::time::Instant;
@@ -14,7 +15,7 @@ mod utils;
 
 fn run(
     window: &mut Window,
-    all_camera_landmarks: &[Arc<Matrix2xX<f64>>],
+    all_camera_landmarks: &[Arc<CameraLandmarks>],
     parameters: &MetaParameters,
 ) -> (f64, usize) {
     let mut current_model: Option<FacePositionModel> = None;
@@ -55,8 +56,7 @@ fn main() {
         .map(|line| {
             let line = line.unwrap();
             let camera_landmarks: Vec<Vector2<f64>> = serde_json::from_str(&line).unwrap();
-            let camera_landmarks = Matrix2xX::from_columns(&camera_landmarks);
-            Arc::new(camera_landmarks)
+            Arc::new(CameraLandmarks::from_mediapipe_facemesh(camera_landmarks))
         })
         .collect();
     let mut window = Window::new("EliDupree's EMG Mouse Gaze Tracker Viz");
