@@ -51,7 +51,8 @@ fn main() {
     // let child_output = BufReader::new(child.stdout.take().unwrap());
     // let lines = child_output.lines();
 
-    let lines = BufReader::new(std::fs::File::open("../test_landmarks").unwrap()).lines();
+    let lines =
+        BufReader::new(std::fs::File::open("../test_landmarks_with_eye_movement").unwrap()).lines();
     let all_camera_landmarks: Vec<_> = lines
         .map(|line| {
             let line = line.unwrap();

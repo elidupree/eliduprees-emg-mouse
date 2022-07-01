@@ -131,7 +131,7 @@ impl MetaParameters {
         MetaParameters {
             translation_rate: 0.2699628982930168,
             rotation_rate: 6.783023480987058,
-            eye_rotation_rate: 1.0,
+            eye_rotation_rate: 100.0,
             reshaping_rate: 0.8420502936726204,
             fov_tweak_rate: 1.1388770853946732,
             eye_center_offsets_change_rate: 1.0,
@@ -192,7 +192,7 @@ impl FacePositionModel {
                 .map(|v| v - mean)
                 .map(|v| Vector3::new(v[0], v[1], 0.0)),
         );
-        let eye_radius = 0.05;
+        let eye_radius = 0.0005;
         let eye_center_offsets = Matrix3x2::from_columns(
             &camera_landmarks
                 .pupils
@@ -328,6 +328,8 @@ impl FacePositionModel {
                 }
             }
 
+            let eye_loss_factor = 1.0; //self.landmark_offsets.ncols() as f64 / 2.0;
+
             for (
                 camera_pupil,
                 eye_center_offset,
@@ -367,7 +369,8 @@ impl FacePositionModel {
                 let two_y_cfy_minus_z_cy_over_z2 = (y_cfy - z_cy) * two_over_z2;
 
                 // "loss is the square of the planar distance between expected and observed camera locations"
-                let loss = (x_cfx * recip_z - cx).powi(2) + (y_cfy * recip_z - cy).powi(2);
+                let loss = ((x_cfx * recip_z - cx).powi(2) + (y_cfy * recip_z - cy).powi(2))
+                    * eye_loss_factor;
                 frame_loss += loss;
 
                 // derivatives of the above loss function
@@ -375,12 +378,12 @@ impl FacePositionModel {
                     cfx * two_x_cfx_minus_z_cx_over_z2,
                     cfy * two_y_cfy_minus_z_cy_over_z2,
                     ((z_cx - x_cfx) * x + ((z_cy - y_cfy) * y)) * two_over_z3,
-                );
+                ) * eye_loss_factor;
 
                 d_loss_d_fov_slope += Vector2::new(
                     x * two_x_cfx_minus_z_cx_over_z2,
                     y * two_y_cfy_minus_z_cy_over_z2,
-                );
+                ) * eye_loss_factor;
 
                 d_loss_d_eye_center_offset += frame.orientation.inverse() * d_loss_d_pupil_position;
 
@@ -644,6 +647,23 @@ impl FacePositionModel {
         for frame in others {
             for offset in self.landmark_offsets.column_iter() {
                 window.draw_point(&frame.landmark_position(offset).to_kiss(), &red);
+            }
+            for ((offset, &radius), &direction) in zip(
+                zip(self.eye_center_offsets.column_iter(), self.eye_radii.iter()),
+                frame.eye_directions.iter(),
+            ) {
+                let center = frame.landmark_position(offset);
+                let pupil = center + direction.into_inner() * radius;
+                window.draw_line(
+                    &center.to_kiss(),
+                    &pupil.to_kiss(),
+                    &Point3::new(1.0, 0.0, 0.0),
+                );
+                window.draw_line(
+                    &pupil.to_kiss(),
+                    &(pupil + direction.into_inner() * 1.0).to_kiss(),
+                    &Point3::new(0.5, 0.0, 0.0),
+                );
             }
         }
         for (offset, &relative_loss) in zip(self.landmark_offsets.column_iter(), &relative_loss) {

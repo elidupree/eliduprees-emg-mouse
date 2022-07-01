@@ -72,8 +72,8 @@ def face_loop():
 
             if results.multi_face_landmarks:
                 landmarks = [[p.x - 0.5, p.y - 0.5] for p in results.multi_face_landmarks[0].landmark]
-                # json.dump(landmarks, sys.stdout)
-                # print()
+                json.dump(landmarks, sys.stdout)
+                print()
 
                 # landmarks = np.array([[p.x - 0.5, p.y - 0.5] for p in results.multi_face_landmarks[0].landmark])
                 # landmarks = landmarks[[4, 152, 263, 33, 287, 57]]
