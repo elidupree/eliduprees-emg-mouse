@@ -1,14 +1,21 @@
 use crate::remote_time_estimator::RemoteTimeEstimator;
 use crate::utils::{load_sound, ConnectionExt, DatagramsExt, LoadedSound};
+use async_bincode::{AsyncBincodeReader, AsyncBincodeWriter, AsyncDestination};
 use enigo::{Enigo, MouseButton, MouseControllable};
+use futures::executor::block_on;
+use futures::sink::SinkExt;
 use rodio::source::Buffered;
 use rodio::OutputStreamHandle;
 use serde::{Deserialize, Serialize};
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::io::AsyncWriteExt;
+use tokio::net::tcp::OwnedWriteHalf;
+use tokio::net::TcpStream;
 use tokio::sync::mpsc::{self, Sender};
 use tokio::task;
+use tokio_stream::StreamExt;
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Debug)]
 pub enum MessageToFollower {
@@ -90,6 +97,7 @@ impl Follower for LocalFollower {
         self.enigo.mouse_scroll_y(length);
     }
 }
+
 impl Follower for RemoteFollower {
     fn handle_message(&mut self, message: MessageToFollower) {
         //bincode::serialize(&message).unwrap();
@@ -133,8 +141,11 @@ impl LocalFollower {
         config.transport = Arc::new(transport_config);
         endpoint.set_default_client_config(config);
 
-        let (connection_sender, mut connection_receiver) =
-            crate::utils::latest_channel::<quinn::Connection>();
+        // let (connection_sender, mut connection_receiver) =
+        //     crate::utils::latest_channel::<quinn::Connection>();
+        let (connection_sender, mut connection_receiver) = crate::utils::latest_channel::<
+            AsyncBincodeWriter<OwnedWriteHalf, MessageFromFollower, _>,
+        >();
 
         std::thread::spawn(|| {
             let start = Instant::now();
@@ -146,9 +157,14 @@ impl LocalFollower {
                         let time_since_start = now - start;
                         let message = MessageFromFollower::MouseMoved { time_since_start };
                         if let Some(connection) = connection_receiver.current() {
-                            if let Err(e) = connection.send_bincode_datagram(&message) {
-                                eprintln!("error sending to supervisor: {:?}", e)
-                            }
+                            // if let Err(e) = conanection.send_bincode_datagram(&message) {
+                            //     eprintln!("error sending to supervisor: {:?}", e)
+                            // }
+                            block_on(async {
+                                if let Err(e) = connection.send(message).await {
+                                    eprintln!("error sending to supervisor: {:?}", e)
+                                }
+                            });
                         }
                         last_sent = now;
                     }
@@ -159,24 +175,42 @@ impl LocalFollower {
         });
 
         loop {
-            if let Ok(quinn::NewConnection {
-                connection,
-                mut datagrams,
-                ..
-            }) = endpoint
-                .connect(supervisor_address.parse().unwrap(), "EMG_supervisor")?
-                .await
-            {
-                if connection
-                    .send_bincode_oneshot_stream(&FollowerIntroduction { name: name.clone() })
+            // if let Ok(quinn::NewConnection {
+            //     connection,
+            //     mut datagrams,
+            //     ..
+            // }) = dbg!(
+            //     endpoint
+            //         .connect(dbg!(supervisor_address.parse().unwrap()), "EMG_supervisor")?
+            //         .await
+            // ) {
+            //     if connection
+            //         .send_bincode_oneshot_stream(&FollowerIntroduction { name: name.clone() })
+            //         .await
+            //         .is_ok()
+            //     {
+            //         connection_sender.send(connection);
+            //
+            //         while let Ok(Some(message)) = datagrams.next_bincode().await {
+            //             self.handle_message(message);
+            //         }
+            //     }
+            // }
+            if let Ok(supervisor_stream) = TcpStream::connect(supervisor_address).await {
+                let (read_half, mut write_half) = supervisor_stream.into_split();
+                let introduction = FollowerIntroduction { name: name.clone() };
+                let introduction_buf = bincode::serialize(&introduction).unwrap();
+                write_half
+                    .write_u32(introduction_buf.len() as u32)
                     .await
-                    .is_ok()
-                {
-                    connection_sender.send(connection);
-
-                    while let Ok(Some(message)) = datagrams.next_bincode().await {
-                        self.handle_message(message);
-                    }
+                    .unwrap();
+                write_half.write(&introduction_buf).await.unwrap();
+                let mut read_stream: AsyncBincodeReader<_, MessageToFollower> =
+                    AsyncBincodeReader::from(read_half);
+                let mut write_stream = AsyncBincodeWriter::from(write_half).for_async();
+                connection_sender.send(write_stream);
+                while let Some(Ok(message)) = read_stream.next().await {
+                    self.handle_message(message);
                 }
             }
 
@@ -193,11 +227,15 @@ impl LocalFollower {
 }
 
 impl RemoteFollower {
-    pub fn new(connection: quinn::Connection) -> RemoteFollower {
+    // pub fn new(connection: quinn::Connection) -> RemoteFollower {
+    pub fn new(
+        mut connection: AsyncBincodeWriter<OwnedWriteHalf, MessageToFollower, AsyncDestination>,
+    ) -> RemoteFollower {
         let (sender, mut receiver) = mpsc::channel(2);
         task::spawn(async move {
             while let Some(message) = receiver.recv().await {
-                let _ = connection.send_bincode_datagram::<MessageToFollower>(&message);
+                //let _ = connection.send_bincode_datagram::<MessageToFollower>(&message);
+                let _ = connection.send(message).await;
             }
         });
         RemoteFollower {
@@ -251,6 +289,7 @@ impl<'a> Deref for SupervisedFollowerMut<'a> {
         }
     }
 }
+
 impl<'a> DerefMut for SupervisedFollowerMut<'a> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         match self {

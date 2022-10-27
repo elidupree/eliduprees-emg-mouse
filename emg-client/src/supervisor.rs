@@ -14,6 +14,7 @@ use log::info;
 use rodio::OutputStream;
 //use rustfft::FftPlanner;
 use crate::webserver_glue::FrontendSession;
+use async_bincode::{AsyncBincodeReader, AsyncBincodeWriter};
 use itertools::multizip;
 use statrs::statistics::Statistics;
 use std::collections::HashMap;
@@ -21,6 +22,8 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use tokio::io::AsyncReadExt;
+use tokio::net::TcpListener;
 use tokio::task;
 use tokio_stream::StreamExt;
 
@@ -100,6 +103,7 @@ pub struct MessageFromIdentifiedFollower {
 trait NotifyOptionExt {
     fn notify(&mut self, message: MessageToFrontend);
 }
+
 impl NotifyOptionExt for Option<Addr<FrontendSession>> {
     fn notify(&mut self, message: MessageToFrontend) {
         if let Some(session) = self {
@@ -246,6 +250,7 @@ impl Handler<ServerReconnected> for Supervisor {
         self.servers[server_index].reconnected();
     }
 }
+
 impl Handler<MessageFromServer> for Supervisor {
     type Result = ();
 
@@ -513,40 +518,68 @@ impl Supervisor {
                     .with_single_cert(vec![cert], key)?;
                 let server_config = quinn::ServerConfig::with_crypto(Arc::new(server_crypto));
 
-                let (_endpoint, mut incoming) =
-                    quinn::Endpoint::server(server_config, ([0, 0, 0, 0], follower_port).into())?;
+                // let (_endpoint, mut incoming) =
+                //     quinn::Endpoint::server(server_config, ([0, 0, 0, 0], follower_port).into())?;
+                let listener = TcpListener::bind(("0.0.0.0", follower_port)).await.unwrap();
 
-                while let Some(connection) = incoming.next().await {
+                // while let Some(connection) = incoming.next().await {
+                while let Ok((stream, _addr)) = listener.accept().await {
+                    dbg!();
                     let supervisor = supervisor.clone();
                     task::spawn(async move {
-                        match connection.await {
-                            Ok(quinn::NewConnection {
-                                connection,
-                                mut uni_streams,
-                                mut datagrams,
-                                ..
-                            }) => {
-                                if let Ok(Some(introduction)) = uni_streams
-                                    .next_bincode_oneshot::<FollowerIntroduction>()
-                                    .await
-                                {
-                                    supervisor.do_send(NewFollower {
-                                        name: introduction.name.clone(),
-                                        follower: SupervisedFollower::new(RemoteFollower::new(
-                                            connection,
-                                        )),
-                                    });
-                                    while let Ok(Some(message)) = datagrams.next_bincode().await {
-                                        let _ =
-                                            supervisor.try_send(MessageFromIdentifiedFollower {
-                                                name: introduction.name.clone(),
-                                                message,
-                                            });
-                                    }
-                                }
+                        // match connection.await {
+                        //     Ok(quinn::NewConnection {
+                        //         connection,
+                        //         mut uni_streams,
+                        //         mut datagrams,
+                        //         ..
+                        //     }) => {
+                        //         if let Ok(Some(introduction)) = uni_streams
+                        //             .next_bincode_oneshot::<FollowerIntroduction>()
+                        //             .await
+                        //         {
+                        //             supervisor.do_send(NewFollower {
+                        //                 name: introduction.name.clone(),
+                        //                 follower: SupervisedFollower::new(RemoteFollower::new(
+                        //                     connection,
+                        //                 )),
+                        //             });
+                        //             while let Ok(Some(message)) = datagrams.next_bincode().await {
+                        //                 let _ =
+                        //                     supervisor.try_send(MessageFromIdentifiedFollower {
+                        //                         name: introduction.name.clone(),
+                        //                         message,
+                        //                     });
+                        //             }
+                        //         }
+                        //     }
+                        //     Err(_e) => { /* connection failed */ }
+                        // }
+
+                        let (mut read_half, write_half) = stream.into_split();
+                        let size = read_half.read_u32().await?;
+                        let mut introduction_buf = vec![0; size as usize];
+                        read_half.read_exact(&mut introduction_buf).await?;
+                        let write_stream = AsyncBincodeWriter::from(write_half).for_async();
+                        let mut read_stream: AsyncBincodeReader<_, MessageFromFollower> =
+                            AsyncBincodeReader::from(read_half);
+                        if let Ok(introduction) =
+                            bincode::deserialize::<FollowerIntroduction>(&introduction_buf)
+                        {
+                            supervisor.do_send(NewFollower {
+                                name: introduction.name.clone(),
+                                follower: SupervisedFollower::new(RemoteFollower::new(
+                                    write_stream,
+                                )),
+                            });
+                            while let Some(Ok(message)) = read_stream.next().await {
+                                let _ = supervisor.try_send(MessageFromIdentifiedFollower {
+                                    name: introduction.name.clone(),
+                                    message,
+                                });
                             }
-                            Err(_e) => { /* connection failed */ }
                         }
+
                         Result::<(), anyhow::Error>::Ok(())
                     });
                 }
