@@ -39,18 +39,36 @@ impl CameraLandmarks {
     }
 }
 
+#[derive(Copy, Clone)]
+struct EyeTarget {
+    screen_index: usize,
+    pixel_location: Vector2<f64>,
+}
+
 #[derive(Clone)]
 struct Frame {
     time_index: usize,
     camera_landmarks: Arc<CameraLandmarks>,
+    known_eye_target: Option<EyeTarget>,
+
     center_of_mass: Vector3<f64>,
     orientation: UnitQuaternion<f64>,
     eye_directions: [UnitVector3<f64>; 2],
 }
 
 #[derive(Clone)]
+struct Screen {
+    pixel_size: Vector2<f64>,
+
+    center: Vector3<f64>,
+    orientation: UnitQuaternion<f64>,
+    physical_radii: Vector2<f64>,
+}
+
+#[derive(Clone)]
 pub struct FacePositionModel {
     frames: Vec<Frame>,
+    screens: Vec<Screen>,
     landmark_offsets: Matrix3xX<f64>,
 
     /// the "spatial depth units per spatial horizontal unit" at 1.0 planar units away from camera center
@@ -73,8 +91,20 @@ struct FrameAnalysis {
 }
 
 #[derive(Clone)]
+struct ScreenAnalysis {
+    loss: f64,
+    d_loss_d_translation: Vector3<f64>,
+    d_loss_d_rotation: Vector3<f64>,
+    d_loss_d_physical_radii: Vector2<f64>,
+    proposed_translation: Vector3<f64>,
+    proposed_rotation: Vector3<f64>,
+    proposed_physical_radii_change: Vector2<f64>,
+}
+
+#[derive(Clone)]
 struct FacePositionModelAnalysis {
     frames: Vec<FrameAnalysis>,
+    screens: Vec<ScreenAnalysis>,
     landmark_loss: DVector<f64>,
     loss: f64,
     d_loss_d_fov_slope: Vector2<f64>,
@@ -97,6 +127,9 @@ pub struct MetaParameters {
     fov_tweak_rate: f64,
     eye_center_offsets_change_rate: f64,
     eye_radius_change_rate: f64,
+    screen_translation_rate: f64,
+    screen_rotation_rate: f64,
+    screen_physical_radii_change_rate: f64,
     learning_smoothness_threshold_logistic_input: f64,
     learning_smoothness_threshold: f64,
     learning_increase_factor: f64,
@@ -136,6 +169,9 @@ impl MetaParameters {
             fov_tweak_rate: 1.1388770853946732,
             eye_center_offsets_change_rate: 1.0,
             eye_radius_change_rate: 1.0,
+            screen_translation_rate: 0.1,
+            screen_rotation_rate: 0.1,
+            screen_physical_radii_change_rate: 0.1,
             learning_smoothness_threshold_logistic_input: 0.590058302151147,
             learning_smoothness_threshold: 0.7649687688799127,
             learning_increase_factor: 1.4423928518524542,
@@ -154,6 +190,9 @@ impl MetaParameters {
         result.eye_rotation_rate *= rng.gen_range(-rate..=rate).exp();
         result.eye_center_offsets_change_rate *= rng.gen_range(-rate..=rate).exp();
         result.eye_radius_change_rate *= rng.gen_range(-rate..=rate).exp();
+        result.screen_translation_rate *= rng.gen_range(-rate..=rate).exp();
+        result.screen_rotation_rate *= rng.gen_range(-rate..=rate).exp();
+        result.screen_physical_radii_change_rate *= rng.gen_range(-rate..=rate).exp();
         result.learning_increase_factor =
             1.0 + (result.learning_increase_factor - 1.0) * rng.gen_range(-rate..=rate).exp();
         result.learning_smoothness_threshold_logistic_input += rng.gen_range(-rate..=rate);
@@ -183,7 +222,10 @@ pub struct AddFrameResults {
 const ROTATION_DIMENSIONS: [[usize; 3]; 3] = [[0, 1, 2], [1, 2, 0], [2, 0, 1]];
 
 impl FacePositionModel {
-    pub fn default_from_camera(camera_landmarks: Arc<CameraLandmarks>) -> Self {
+    pub fn default_from_camera(
+        camera_landmarks: Arc<CameraLandmarks>,
+        screen_pixel_sizes: &[Vector2<f64>],
+    ) -> Self {
         let mean = camera_landmarks.regular_landmarks.column_mean();
         let landmark_offsets = matrix_from_column_iter(
             camera_landmarks
@@ -205,10 +247,21 @@ impl FacePositionModel {
             frames: vec![Frame {
                 time_index: 0,
                 camera_landmarks,
+                known_eye_target: None,
                 center_of_mass: Vector3::new(0.0, 0.0, 1.0),
                 orientation: UnitQuaternion::identity(),
                 eye_directions: [Unit::new_unchecked(Vector3::new(0.0, 0.0, -1.0)); 2],
             }],
+            screens: screen_pixel_sizes
+                .iter()
+                .copied()
+                .map(|pixel_size| Screen {
+                    pixel_size,
+                    center: Default::default(),
+                    orientation: UnitQuaternion::identity(),
+                    physical_radii: pixel_size / pixel_size[0],
+                })
+                .collect(),
             landmark_offsets,
             camera_fov_slope: Vector2::new(1.0, 1.0),
             eye_center_offsets,
@@ -461,6 +514,7 @@ impl FacePositionModel {
         }
         FacePositionModelAnalysis {
             frames,
+            screens: vec![],
             landmark_loss,
             loss,
             d_loss_d_fov_slope,
@@ -721,6 +775,19 @@ fn descend(
                 ..*f
             })
             .collect(),
+        screens: model
+            .screens
+            .iter()
+            .zip(&analysis.screens)
+            .map(|(s, a)| Screen {
+                pixel_size: s.pixel_size,
+                center: &s.center + a.proposed_translation * learning_rate,
+                orientation: rotation_quaternion(a.proposed_rotation * learning_rate)
+                    * s.orientation,
+                physical_radii: &s.physical_radii
+                    + a.proposed_physical_radii_change * learning_rate,
+            })
+            .collect(),
         landmark_offsets: &model.landmark_offsets
             + &analysis.proposed_landmark_offsets_change * learning_rate,
         camera_fov_slope: &model.camera_fov_slope
@@ -801,6 +868,7 @@ fn descend_last_frame(
             .cloned()
             .chain(std::iter::once(new_last))
             .collect(),
+        screens: model.screens.clone(),
         landmark_offsets: model.landmark_offsets.clone(),
         camera_fov_slope: model.camera_fov_slope.clone(),
         eye_center_offsets: model.eye_center_offsets.clone(),

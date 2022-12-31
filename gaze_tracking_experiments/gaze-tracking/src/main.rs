@@ -1,4 +1,4 @@
-#![feature(array_zip, array_from_fn, default_free_fn)]
+#![feature(array_zip, default_free_fn)]
 
 use crate::face_position_model::{
     AddFrameResults, CameraLandmarks, FacePositionModel, MetaParameters,
@@ -33,6 +33,7 @@ fn run(
         } else {
             current_model = Some(FacePositionModel::default_from_camera(
                 camera_landmarks.clone(),
+                &[Vector2::new(3840.0, 2160.0), Vector2::new(3840.0, 2160.0)],
             ));
         }
         window.render();
