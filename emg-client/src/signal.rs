@@ -250,8 +250,10 @@ impl Signal {
             //self.frequency_states = (1..FFT_WINDOW)
             // .map(|f| f as f64 / (FFT_WINDOW as f64 / 1000.0))
             // .map(|f| 500.0 * 0.895_f64.powi(f as i32))
-            self.frequency_states = (0..FFT_WINDOW)
-                .map(|f| 20.0 * (500.0f64 / 20.0).powf(f as f64 / (FFT_WINDOW - 1) as f64))
+            // self.frequency_states = (0..FFT_WINDOW)
+            //     .map(|f| 20.0 * (500.0f64 / 20.0).powf(f as f64 / (FFT_WINDOW - 1) as f64))
+            self.frequency_states = (1..FFT_WINDOW)
+                .map(|f| f as f64 / (FFT_WINDOW as f64 * 2.0 / 1000.0))
                 .map(SingleFrequencyState::new)
                 .collect();
         }

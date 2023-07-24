@@ -9,17 +9,17 @@ use std::collections::HashMap;
 use std::convert::TryInto;
 use std::fs::File;
 use std::io::BufReader;
-use std::lazy::SyncLazy;
 use std::path::Path;
 use std::sync::atomic::Ordering;
+use std::sync::LazyLock;
 use std::sync::{Arc, RwLock};
 use tokio_stream::StreamExt;
 
-static VARIABLES: SyncLazy<RwLock<HashMap<String, f64>>> = SyncLazy::new(|| {
+static VARIABLES: LazyLock<RwLock<HashMap<String, f64>>> = LazyLock::new(|| {
     RwLock::new({
         [
-            ("max_activity_contribution_per_frequency", 30.0),
-            ("activity_threshold", 50.0),
+            ("max_activity_contribution_per_frequency", 8.0),
+            ("activity_threshold", 60.0),
             ("incremental_reduction_per_frame", 1.0 / 250.0),
         ]
         .into_iter()
@@ -31,9 +31,11 @@ static VARIABLES: SyncLazy<RwLock<HashMap<String, f64>>> = SyncLazy::new(|| {
 pub fn set_variable(key: &str, value: f64) {
     *VARIABLES.write().unwrap().get_mut(key).unwrap() = value;
 }
+
 pub fn get_variable(key: &str) -> f64 {
     VARIABLES.read().unwrap()[key]
 }
+
 pub fn get_variables() -> HashMap<String, f64> {
     VARIABLES.read().unwrap().clone()
 }
@@ -80,6 +82,7 @@ pub fn load_sound(path: impl AsRef<Path>) -> Buffered<LoadedSound> {
         .convert_samples()
         .buffered()
 }
+
 pub type LoadedSound = impl Source<Item = f32>;
 
 #[async_trait]
