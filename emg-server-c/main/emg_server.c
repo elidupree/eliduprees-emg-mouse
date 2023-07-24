@@ -13,7 +13,8 @@
 #include "sdkconfig.h"
 #include "driver/adc.h"
 #include "driver/i2s.h"
-//#include "driver/uart.h"
+#include "driver/uart.h"
+#include "driver/gpio.h"
 #include <soc/i2s_struct.h>
 #include <soc/i2s_reg.h>
 #include <soc/rtc.h>
@@ -86,6 +87,7 @@ const uint16_t HEADER_SIZE = 26;
 
 void communication_task(void* arg) {
   uint64_t sample_index = 0;
+  uint16_t num_samples_in_message = 0;
   uint32_t send_buffer_read_pos = 0;
   const uint16_t MAX_MESSAGE_SIZE = 16 + 82*6;
   uint8_t message_data[MAX_MESSAGE_SIZE];
@@ -97,17 +99,18 @@ void communication_task(void* arg) {
   // next 8 bytes are a random id that disambiguates which run of the server
   esp_fill_random(message_data+8, 8);
 
-  uint16_t message_size = HEADER_SIZE;
   // next 8 bytes are the index of the first sample in the notification, and next 2 are reserved for the number of samples
   *((uint64_t*)&message_data[16]) = sample_index;
   while(1) {
-    while (message_size+6 <= MAX_MESSAGE_SIZE) {
+    while (HEADER_SIZE + (num_samples_in_message+1)*6 <= MAX_MESSAGE_SIZE) {
       uint16_t average = send_buffer[send_buffer_read_pos];
       if (average == SEND_BUFFER_UNUSED) {
-        if (send_buffer_read_pos % 8 == 0) {
+        if (num_samples_in_message > 0) {
+          // if we already have message content, might as well send it rather than waiting for samples to be completed
           break;
         }
         else {
+          // the other task is working as fast as it can, so we might as well spin loop waiting for it
           continue;
         }
       }
@@ -118,24 +121,30 @@ void communication_task(void* arg) {
       }
 
       if (send_buffer_read_pos % 4 == 0) {
-        message_data[message_size++] = latest_samples[0] >> 4;
-        message_data[message_size++] = latest_samples[1] >> 4;
-        message_data[message_size++] = latest_samples[2] >> 4;
-        message_data[message_size++] = latest_samples[3] >> 4;
-        message_data[message_size++] = ((latest_samples[0] & 0xf) << 4) + (latest_samples[1] & 0xf);
-        message_data[message_size++] = ((latest_samples[2] & 0xf) << 4) + (latest_samples[3] & 0xf);
+        uint16_t start = HEADER_SIZE + num_samples_in_message*6;
+        message_data[start+0] = latest_samples[0] >> 4;
+        message_data[start+1] = latest_samples[1] >> 4;
+        message_data[start+2] = latest_samples[2] >> 4;
+        message_data[start+3] = latest_samples[3] >> 4;
+        message_data[start+4] = ((latest_samples[0] & 0xf) << 4) + (latest_samples[1] & 0xf);
+        message_data[start+5] = ((latest_samples[2] & 0xf) << 4) + (latest_samples[3] & 0xf);
+//        if (start < HEADER_SIZE || start+5 >= MAX_MESSAGE_SIZE) {
+//        return;}
         sample_index += 1;
+        num_samples_in_message += 1;
       }
     }
 
-    if (message_size > HEADER_SIZE) {
-      *((uint16_t*)&message_data[24]) = message_size;
-      //uart_write_bytes(UART_NUM_0, message_data, message_size);
-      write(1, message_data, message_size);
-      fflush(stdout);
-      message_size = HEADER_SIZE;
-      *((uint64_t*)&message_data[16]) = sample_index;
-    }
+    *((uint16_t*)&message_data[24]) = num_samples_in_message;
+    //uart_write_bytes(UART_NUM_0, message_data, message_size);
+//    for(uint16_t i = 0; i < 29; i++) {
+//      message_data[i+8] = i;
+//    }
+    uart_write_bytes(UART_NUM_0, message_data, HEADER_SIZE + num_samples_in_message*6);
+//    write(1, message_data, 28);//HEADER_SIZE + num_samples_in_message*6);
+    fflush(stdout);
+    num_samples_in_message = 0;
+    *((uint64_t*)&message_data[16]) = sample_index;
     vTaskDelay(1);
   }
 }
@@ -319,6 +328,18 @@ void app_main(void)
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK( ret );
+
+
+    uart_config_t uart_config = {
+        .baud_rate = 115200,
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
+        .source_clk = UART_SCLK_APB,
+    };
+    ESP_ERROR_CHECK(uart_driver_install(UART_NUM_0, 1024-1, 0, 0, NULL, 0));
+    ESP_ERROR_CHECK(uart_param_config(UART_NUM_0, &uart_config));
 //    int j = 0;
 //    while(true) {
 //      j++;

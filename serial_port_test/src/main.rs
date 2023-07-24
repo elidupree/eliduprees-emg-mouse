@@ -34,7 +34,13 @@ async fn main() {
                     ]
                 })
                 .collect::<Vec<_>>();
-            dbg!((server_run_id, first_sample_index, num_samples, samples));
+            dbg!((
+                message_start,
+                server_run_id,
+                first_sample_index,
+                num_samples,
+                samples,
+            ));
         }
         // if message.len() >= 8 && &message[..8] == "emg_data".as_bytes() {
         //     dbg!(message);
