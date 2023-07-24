@@ -4,26 +4,27 @@ use tokio_serial::SerialPortBuilderExt;
 const MAX_SEND_SIZE: usize = 16 + 82 * 6;
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut stream = tokio_serial::new("/dev/ttyUSB0", 115200)
         .open_native_async()
         .unwrap();
     let mut buffer = [0; MAX_SEND_SIZE];
-    let mut i = 0;
-    while let Ok(bytes_read) = dbg!(stream.read(&mut buffer).await) {
-        let message = &buffer[..bytes_read];
-        if let Ok(message) = std::str::from_utf8(message) {
-            dbg!(message);
+    let mut recent = Vec::with_capacity(8);
+    loop {
+        let val = stream.read_u8().await?;
+        if recent.len() >= 8 {
+            recent.pop();
         }
-        if let Some(message_start) = message
-            .windows(8)
-            .position(|window| window == "emg_data".as_bytes())
-        {
-            let data = &message[message_start + 8..];
-            let server_run_id = u64::from_le_bytes((&data[0..8]).try_into().unwrap());
-            let first_sample_index = u64::from_le_bytes((&data[8..16]).try_into().unwrap());
-            let num_samples = u16::from_le_bytes((&data[16..18]).try_into().unwrap());
-            let samples = data[18..]
+        recent.push(val);
+        if &recent == "emg_data".as_bytes() {
+            recent.clear();
+            let server_run_id = stream.read_u64_le().await?;
+            let first_sample_index = stream.read_u64_le().await?;
+            let num_samples = stream.read_u16_le().await?;
+            let sample_data = &mut buffer[..(num_samples as usize) * 6];
+            stream.read_exact(sample_data).await?;
+
+            let samples = sample_data
                 .chunks_exact(6)
                 .map(|chunk| {
                     [
@@ -34,22 +35,7 @@ async fn main() {
                     ]
                 })
                 .collect::<Vec<_>>();
-            dbg!((
-                message_start,
-                server_run_id,
-                first_sample_index,
-                num_samples,
-                samples,
-            ));
-        }
-        // if message.len() >= 8 && &message[..8] == "emg_data".as_bytes() {
-        //     dbg!(message);
-        // }
-        //dbg!(message);
-        i += 1;
-        if i > 100 {
-            break;
+            dbg!((server_run_id, first_sample_index, num_samples, samples,));
         }
     }
-    println!("Hello, world!");
 }
