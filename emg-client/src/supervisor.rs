@@ -1,10 +1,9 @@
-use crate::bluetooth::messages_from_server;
-use crate::bluetooth::ReportFromServer;
 use crate::follower::{
     FollowerIntroduction, LocalFollower, MessageFromFollower, RemoteFollower, SupervisedFollower,
     SupervisedFollowerMut,
 };
 use crate::remote_time_estimator::RemoteTimeEstimator;
+use crate::serial_port_communication::{messages_from_server, ReportFromServer};
 use crate::signal::Signal;
 use crate::utils::{DatagramsExt, IncomingUniStreamsExt};
 use crate::webserver::{MessageFromFrontend, MessageToFrontend};

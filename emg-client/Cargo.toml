@@ -15,6 +15,7 @@ enigo = { git = "https://github.com/elidupree/enigo/" }
 rodio = "0.15.0"
 tokio = "1.17.0"
 tokio-stream = "0.1.8"
+tokio-serial = "5.4.4"
 async-trait = "0.1.52"
 futures = "0.3.21"
 atomicbox = "0.4.0"
