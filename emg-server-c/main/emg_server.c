@@ -189,7 +189,7 @@ void adc_task(void * arg) {
         for(uint32_t adc_index = 0; adc_index < 4; adc_index++) {
           uint32_t total = 0;
           uint32_t count = 0;
-          int64_t start_us = start_time + sample_index * 1000 + adc_index * 250;
+          int64_t start_us = start_time + (sample_index * 1000*1000 + adc_index * 250*1000)/1020;
           int64_t stop_us = start_us + 200;
           adc_channel_t channel = adc_channels[adc_index];
           while (esp_timer_get_time() < start_us){}

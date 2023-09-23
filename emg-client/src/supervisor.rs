@@ -293,7 +293,7 @@ impl Handler<MessageFromServer> for Supervisor {
             )) {
                 signal.receive_raw(
                     input as f64, /*- average*/
-                    (report.first_sample_index + sample_index_within_report as u64) as f64 / 1000.0,
+                    (report.first_sample_index + sample_index_within_report as u64) as f64 / 1020.0,
                     //&mut self.fft_planner,
                     |f| new_history_frames.push(f),
                     |f| new_frequencies_frames.push(f),
