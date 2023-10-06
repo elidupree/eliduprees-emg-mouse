@@ -23,7 +23,7 @@ async fn read_messages(mut sender: UnboundedSender<ReportFromServer>) -> Result<
     loop {
         let val = stream.read_u8().await?;
         if recent.len() >= 8 {
-            recent.pop();
+            recent.remove(0);
         }
         recent.push(val);
         if &recent == "emg_data".as_bytes() {

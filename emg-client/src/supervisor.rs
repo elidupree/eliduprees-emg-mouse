@@ -284,6 +284,11 @@ impl Handler<MessageFromServer> for Supervisor {
         let mut new_history_frames = [const { Vec::new() }; 4];
         let mut new_frequencies_frames = [const { Vec::new() }; 4];
 
+        let move_time = self.active_follower().most_recent_mouse_move();
+        let recently_moved = (Instant::now() - move_time) < Duration::from_millis(50);
+        let anywhere_near_recently_moved =
+            (Instant::now() - move_time) < Duration::from_millis(10000);
+
         for (sample_index_within_report, inputs) in report.samples.iter().enumerate() {
             let _average = inputs.iter().map(|&i| i as f64).mean();
 
@@ -295,8 +300,9 @@ impl Handler<MessageFromServer> for Supervisor {
                 &mut new_frequencies_frames,
             )) {
                 signal.receive_raw(
-                    input as f64, /*- average*/
+                    input as f64, //- inputs[3] as f64 + 1500.0, /*- average*/
                     (report.first_sample_index + sample_index_within_report as u64) as f64 / 1020.0,
+                    mouse_active_before && !anywhere_near_recently_moved,
                     //&mut self.fft_planner,
                     |f| new_history_frames.push(f),
                     |f| new_frequencies_frames.push(f),
@@ -305,10 +311,6 @@ impl Handler<MessageFromServer> for Supervisor {
 
             if self.servers[server_index].signals[2].is_active() != mouse_active_before {
                 if self.servers[server_index].signals[2].is_active() {
-                    let move_time = self.active_follower().most_recent_mouse_move();
-                    let recently_moved = (Instant::now() - move_time) < Duration::from_millis(50);
-                    let anywhere_near_recently_moved =
-                        (Instant::now() - move_time) < Duration::from_millis(10000);
                     if self.enabled && !recently_moved && anywhere_near_recently_moved {
                         self.active_follower().mousedown();
                         self.mouse_pressed = true;

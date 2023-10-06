@@ -4,6 +4,7 @@ use crate::webserver::{FrequenciesFrame, HistoryFrame};
 use crate::utils::get_variable;
 use arrayvec::ArrayVec;
 use num_complex::Complex;
+use ordered_float::OrderedFloat;
 use statrs::statistics::Statistics;
 use std::collections::VecDeque;
 use std::f64::consts::TAU;
@@ -28,15 +29,21 @@ pub enum ActiveState {
 pub struct Window<T, const SIZE: usize> {
     num_values_seen: u64,
     values: VecDeque<T>,
+    // invariant: equal to the sum of `values`, except maybe floating-point rounding error.
     cached_sum: T,
+    // keeping a running sum of floating-point numbers by repeatedly adding and subtracting, may drift over time.
+    // therefore, occasionally remake the sum from scratch.
     next_sum: T,
 }
 
 impl<T: Default + Copy + AddAssign + SubAssign, const SIZE: usize> Window<T, SIZE> {
-    pub fn push(&mut self, value: T) {
+    pub fn push(&mut self, value: T) -> Option<T> {
         self.num_values_seen += 1;
+        let mut result = None;
         if self.values.len() >= SIZE {
-            self.cached_sum -= self.values.pop_front().unwrap();
+            let dropped = self.values.pop_front().unwrap();
+            self.cached_sum -= dropped;
+            result = Some(dropped);
         }
         self.values.push_back(value);
         self.cached_sum += value;
@@ -45,6 +52,7 @@ impl<T: Default + Copy + AddAssign + SubAssign, const SIZE: usize> Window<T, SIZ
             self.cached_sum = self.next_sum;
             self.next_sum = T::default();
         }
+        result
     }
     // pub fn sum(&self) -> T {
     //     self.cached_sum
@@ -58,9 +66,9 @@ impl<T: Default + Copy + AddAssign + SubAssign, const SIZE: usize> Window<T, SIZ
     pub fn last(&self) -> Option<T> {
         self.values.back().copied()
     }
-    // pub fn is_full(&self) -> bool {
-    //     self.values.len() == SIZE
-    // }
+    pub fn is_full(&self) -> bool {
+        self.values.len() == SIZE
+    }
 }
 
 impl<T: Copy + Div<f64>, const SIZE: usize> Window<T, SIZE> {
@@ -83,6 +91,7 @@ const SIZE_OF_CHUNK_OVER_WHICH_MAXIMUM_IS_TAKEN: usize = 100;
 const ACTIVITY_ONSET_LEEWAY: usize = 1000;
 const NUMBER_OF_CHUNKS_OVER_WHICH_MAXIMA_ARE_TAKEN: usize = 30;
 const FFT_HISTORY_SIZE: usize = 3000;
+const LINE_NOISE_BLOCK_SIZE: usize = 1020 / 60;
 
 #[derive(Clone)]
 struct ActivityThresholdStats {
@@ -211,6 +220,7 @@ pub struct Signal {
     pub frequency_states: Vec<SingleFrequencyState>,
     pub aggregate_activity_level: f64,
     pub frequencies_history: [VecDeque<Vec<f64>>; 3],
+    pub line_noise_blocks: [Window<f64, LINE_NOISE_BLOCK_SIZE>; 12],
     pub active_state: ActiveState,
 }
 
@@ -235,12 +245,32 @@ impl Signal {
     // }
     pub fn receive_raw(
         &mut self,
-        raw_value: f64,
+        mut raw_value: f64,
         time: f64,
+        force_idle: bool,
         report_frame: impl FnOnce(HistoryFrame),
         report_frequency_frame: impl FnOnce(FrequenciesFrame),
     ) {
         self.total_inputs += 1;
+
+        // To filter line noise, we keep track of some recent (1/60)s blocks. Within each of these blocks, the phase-matched sample will differ from the average of the block by a certain amount; we subtract the median of these amounts from the current sample. This should avoid some of the common cases of incorrectly correcting for values that are from the actual signal
+        let mut submitted = Some(raw_value);
+        for block in &mut self.line_noise_blocks {
+            if let Some(s) = submitted {
+                submitted = block.push(s);
+            }
+        }
+        if self.line_noise_blocks.last().unwrap().is_full() {
+            let mut values = self
+                .line_noise_blocks
+                .each_ref()
+                .map(|b| b.values().next().unwrap() - b.mean());
+            values[1..].sort_by_key(|&f| OrderedFloat(f));
+            // let mean = values[1..].iter().sum::<f64>() / values[1..].len() as f64;
+            let median = values[6];
+            raw_value -= median;
+        }
+
         self.recent_raw_inputs.push_back(raw_value / 1500.0);
         if self.recent_raw_inputs.len() > 1000 {
             self.recent_raw_inputs.pop_front();
@@ -257,22 +287,23 @@ impl Signal {
                 .map(SingleFrequencyState::new)
                 .collect();
         }
-        let signal_idle = match self.active_state {
-            ActiveState::Inactive {
-                last_deactivated_sample,
-                ..
-            } => {
-                last_deactivated_sample
-                    + i64::try_from(
-                        SIZE_OF_CHUNK_OVER_WHICH_MAXIMUM_IS_TAKEN
-                            * NUMBER_OF_CHUNKS_OVER_WHICH_MAXIMA_ARE_TAKEN
-                            + ACTIVITY_ONSET_LEEWAY,
-                    )
-                    .unwrap()
-                    < i64::try_from(self.total_inputs).unwrap()
-            }
-            _ => false,
-        };
+        let signal_idle = force_idle
+            || match self.active_state {
+                ActiveState::Inactive {
+                    last_deactivated_sample,
+                    ..
+                } => {
+                    last_deactivated_sample
+                        + i64::try_from(
+                            SIZE_OF_CHUNK_OVER_WHICH_MAXIMUM_IS_TAKEN
+                                * NUMBER_OF_CHUNKS_OVER_WHICH_MAXIMA_ARE_TAKEN
+                                + ACTIVITY_ONSET_LEEWAY,
+                        )
+                        .unwrap()
+                        < i64::try_from(self.total_inputs).unwrap()
+                }
+                _ => false,
+            };
         for state in &mut self.frequency_states {
             state.observe_raw_signal_value(raw_value / 1500.0, time, signal_idle);
         }
