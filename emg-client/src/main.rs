@@ -1,8 +1,16 @@
-#![feature(type_alias_impl_trait, inline_const, once_cell, never_type)]
+#![feature(
+    type_alias_impl_trait,
+    inline_const,
+    lazy_cell,
+    never_type,
+    array_methods
+)]
 
-//mod bluetooth;
+#[cfg(feature = "bluetooth")]
+mod bluetooth;
 mod follower;
 mod remote_time_estimator;
+#[cfg(not(feature = "bluetooth"))]
 mod serial_port_communication;
 mod signal;
 mod supervisor;

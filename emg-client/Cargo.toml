@@ -40,6 +40,8 @@ emg-mouse-shared = { path = "../emg-mouse-shared" }
 rdev = "0.5.1"
 arrayvec = "0.7.2"
 
+[features]
+bluetooth = []
 
 [profile.dev]
 opt-level = 3

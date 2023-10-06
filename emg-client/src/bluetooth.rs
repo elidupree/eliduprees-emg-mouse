@@ -65,10 +65,10 @@ pub fn messages_from_server() -> impl Stream<Item = ReportFromServer> {
             match timeout(Duration::from_secs(1), stream.next()).await {
                 Ok(Some(notification)) => {
                     let server_run_id =
-                        u64::from_le_bytes((&notification.value[0..8]).try_into().unwrap());
-                    let first_sample_index =
                         u64::from_le_bytes((&notification.value[8..16]).try_into().unwrap());
-                    let samples = notification.value[16..]
+                    let first_sample_index =
+                        u64::from_le_bytes((&notification.value[16..24]).try_into().unwrap());
+                    let samples = notification.value[26..]
                         .chunks_exact(6)
                         .map(|chunk| {
                             [

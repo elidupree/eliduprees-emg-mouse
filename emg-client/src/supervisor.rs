@@ -1,8 +1,11 @@
+#[cfg(feature = "bluetooth")]
+use crate::bluetooth::{messages_from_server, ReportFromServer};
 use crate::follower::{
     FollowerIntroduction, LocalFollower, MessageFromFollower, RemoteFollower, SupervisedFollower,
     SupervisedFollowerMut,
 };
 use crate::remote_time_estimator::RemoteTimeEstimator;
+#[cfg(not(feature = "bluetooth"))]
 use crate::serial_port_communication::{messages_from_server, ReportFromServer};
 use crate::signal::Signal;
 use crate::utils::{DatagramsExt, IncomingUniStreamsExt};
